@@ -1,0 +1,243 @@
+.settlement-success-page {
+  min-height: 100vh;
+  background: #f3f4f6;
+  padding: 20px;
+  font-family: Arial, sans-serif;
+}
+
+.settlement-success-card {
+  background: white;
+  border-radius: 0 0 24px 24px;
+  overflow: hidden;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+  min-height: 500px;
+}
+
+.settlement-top-line {
+  height: 8px;
+  background: #22c55e;
+}
+
+.settlement-header-section {
+  padding: 22px 22px 10px;
+}
+
+.settlement-table-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 800;
+  color: #111827;
+}
+
+.settlement-order-number {
+  margin-top: 8px;
+  font-size: 18px;
+  color: #94a3b8;
+  font-weight: 700;
+}
+
+.settlement-info-badge-row {
+  display: flex;
+  gap: 12px;
+  padding: 0 22px 18px;
+}
+
+.settlement-info-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 700;
+
+  width: fit-content;
+  flex: 0 0 auto;
+}
+
+.settlement-info-badge.green {
+  background: #fef2f2;
+  color: #22c55e;
+  border: 1px solid #fed7aa;
+}
+
+.settlement-info-badge.gray {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.settlement-kitchen-title {
+  padding: 12px 18px;
+  color: #f97316;
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 1px;
+}
+
+.settlement-items-list {
+  padding: 0 18px 25px;
+}
+
+.settlement-order-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.settlement-qty-box {
+  min-width: 54px;
+  height: 42px;
+  border-radius: 12px;
+  background: #fff1f2;
+  color: #f97316;
+  font-size: 20px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settlement-dish-name {
+  font-size: 22px;
+  font-weight: 800;
+  color: #111827;
+}
+
+@media (max-width: 768px) {
+
+  .settlement-success-page {
+    padding: 0;
+  }
+
+  .settlement-info-badge-row{
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .settlement-table-title {
+    font-size: 22px;
+  }
+
+  .settlement-dish-name {
+    font-size: 18px;
+  }
+
+  .settlement-qty-box {
+    min-width: 48px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+}
+
+.settlement-items-list{
+  padding: 0 18px 25px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.settlement-items-list::-webkit-scrollbar{
+  width: 6px;
+}
+
+.settlement-items-list::-webkit-scrollbar-thumb{
+  background: #d1d5db;
+  border-radius: 20px;
+}
+
+.settlement-item-content{
+  flex: 1;
+}
+
+.settlement-dish-top{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.settlement-item-price{
+  font-size: 18px;
+  font-weight: 800;
+  color: #16a34a;
+}
+
+.settlement-status-row{
+  margin-top: 8px;
+}
+
+.settlement-status{
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settlement-status.preparing{
+  background: #fef3c7;
+  color: #d97706;
+}
+
+/* .settlement-header-section{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+} */
+
+.settlement-home-btn{
+  width: 45px;
+  height: 45px;
+  border: none;
+  border-radius: 50%;
+  /* background: #ff6b00; */
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.settlement-header-section{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.settlement-header-actions{
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.settlement-status.ready{
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.settlement-mods {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #666;
+  line-height: 1.5;
+}
+
+.settlement-dish-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.settlement-dish-name {
+  font-weight: 700;
+}
+
+.settlement-item-price {
+  font-weight: 700;
+  color: #f97316;
+}
