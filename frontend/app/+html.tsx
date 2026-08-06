@@ -27,6 +27,30 @@ export default function Root({ children }: { children: React.ReactNode }) {
 }
 
 const htmlStyles = `
+@font-face {
+  font-family: 'Ionicons';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/Ionicons.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Material Community Icons';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/MaterialCommunityIcons.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'FontAwesome5Free-Solid';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/FontAwesome5_Solid.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'FontAwesome5Free-Regular';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/FontAwesome5_Regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'FontAwesome5Brands-Regular';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/FontAwesome5_Brands.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Feather';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/Feather.ttf') format('truetype');
+}
 body {
   background-color: #F8F9FA;
   margin: 0;
