@@ -12,7 +12,7 @@ import {
   Inter_900Black,
   useFonts,
 } from "@expo-google-fonts/inter";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons, FontAwesome5, Feather } from "@expo/vector-icons";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
@@ -471,6 +471,15 @@ export default function RootLayout() {
 
   const [fontsLoaded, fontError] = useFonts({
     ...Ionicons.font,
+    ...MaterialCommunityIcons.font,
+    ...FontAwesome5.font,
+    ...Feather.font,
+    "Ionicons": require("@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf"),
+    "Material Community Icons": require("@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf"),
+    "FontAwesome5Free-Solid": require("@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Solid.ttf"),
+    "FontAwesome5Free-Regular": require("@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Regular.ttf"),
+    "FontAwesome5Brands-Regular": require("@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Brands.ttf"),
+    "Feather": require("@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Feather.ttf"),
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
