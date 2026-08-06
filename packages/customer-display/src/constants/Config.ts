@@ -29,7 +29,7 @@ export let API_URL: string = isDev
   ? `http://${getLocalBackendIP()}:3000`
   : (
     (typeof process !== 'undefined' ? process.env?.EXPO_PUBLIC_API_URL : undefined) ??
-    'https://pos-qr-production-5142.up.railway.app'
+    'https://kindee-2026-production.up.railway.app'
 
   );
 

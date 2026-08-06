@@ -1,1 +1,1 @@
-export const BASE_URL = "https://pos-qr-production-5142.up.railway.app";
+export const BASE_URL = "https://kindee-2026-production.up.railway.app";
