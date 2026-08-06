@@ -28,8 +28,16 @@ export default function Root({ children }: { children: React.ReactNode }) {
 
 const htmlStyles = `
 @font-face {
+  font-family: 'ionicons';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/Ionicons.ttf') format('truetype');
+}
+@font-face {
   font-family: 'Ionicons';
   src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/Ionicons.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'material-community';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/MaterialCommunityIcons.ttf') format('truetype');
 }
 @font-face {
   font-family: 'Material Community Icons';
@@ -46,6 +54,10 @@ const htmlStyles = `
 @font-face {
   font-family: 'FontAwesome5Brands-Regular';
   src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/FontAwesome5_Brands.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'feather';
+  src: url('https://unpkg.com/react-native-vector-icons@10.2.0/Fonts/Feather.ttf') format('truetype');
 }
 @font-face {
   font-family: 'Feather';
