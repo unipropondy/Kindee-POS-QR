@@ -34,14 +34,14 @@ function formatKOTThermalText(data, type = 'NEW') {
   const DIV = '[L]------------------------------------------------\n';
 
   // ── HEADER ──────────────────────────────────────────────────────────
-  let text = '\n\n';
-  text += `[C]<B>${title}</B>\n`;
-  text += `[C]${dateStr}  ${timeStr}\n`;
+  let text = '';
+  text += `[C]<font size="big"><B>${title}</B></font>\n`;
+  text += `[C]<B>${dateStr}  ${timeStr}</B>\n`;
   text += DIV;
 
   if (type !== 'KDS_PRINT') {
     // KOT: TABLE visible at top
-    text += `[C]<font size='big'><B>TABLE : ${tableNo}</B></font>\n`;
+    text += `[C]<font size="big"><B>TABLE : ${tableNo}</B></font>\n`;
     text += DIV;
   }
 
@@ -83,7 +83,7 @@ function formatKOTThermalText(data, type = 'NEW') {
   if (type === 'KDS_PRINT') {
     // KDS: TABLE big at the bottom
     text += DIV;
-    text += `[C]<font size='big'><B>TABLE NO : ${tableNo}</B></font>\n`;
+    text += `[C]<font size="big"><B>TABLE NO : ${tableNo}</B></font>\n`;
     text += DIV;
   } else {
     // KOT: Kitchen Name + Table Number always at the very bottom
@@ -96,12 +96,11 @@ function formatKOTThermalText(data, type = 'NEW') {
           : '');
     if (kotLabel) {
       text += DIV;
-      text += `[C]<font size='big'><B>${kotLabel}</B></font>\n`;
+      text += `[C]<font size="big"><B>${kotLabel}</B></font>\n`;
       text += DIV;
     }
   }
 
-  text += '\n\n';
   return text;
 }
 
@@ -145,23 +144,23 @@ function _formatItem(item) {
   // ── Item name: big + bold, wrap at 19 chars (big-font width minus prefix) ──
   const BIG_NAME = 19;   // big-font chars available after "[qty] "
   const BIG_CONT = 20;   // big-font chars available on continuation lines (4-space indent)
-  const MOD_WRAP = 44;   // normal-font chars available for modifiers
+  const MOD_WRAP = 38;   // medium-font chars available for modifiers
 
   _wrapText(itemName.replace(/\n/g, ' '), BIG_NAME).forEach((chunk, idx) => {
     if (idx === 0) {
-      text += `[L]<font size='big'><B>[${qtyNum}] ${chunk}</B></font>\n`;
+      text += `[L]<font size="big"><B>[${qtyNum}] ${chunk}</B></font>\n`;
     } else {
-      text += `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
+      text += `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
     }
   });
 
   // ── Song name ──────────────────────────────────────────────────────────────
   const songName = item.songName || item.SongName || '';
-  if (songName) text += `[L]    ♪ ${songName}\n`;
+  if (songName) text += `[L]        <B>♪ ${songName}</B>\n`;
 
   // ── Takeaway flag ──────────────────────────────────────────────────────────
   const isTakeaway = !!(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
-  if (isTakeaway) text += `[L]    >> TAKEAWAY <<\n`;
+  if (isTakeaway) text += `[L]        <B>>> TAKEAWAY <<</B>\n`;
 
   // ── Modifiers (normal font, no big) — wrap at 44 chars ────────────────────
   if (item.modifiers && item.modifiers.length > 0) {
@@ -170,23 +169,46 @@ function _formatItem(item) {
       if (modName) {
         _wrapText(modName, MOD_WRAP).forEach((chunk, idx) => {
           text += idx === 0
-            ? `[L]    + ${chunk}\n`
-            : `[L]      ${chunk}\n`;
+            ? `[L]        <B>+ ${chunk}</B>\n`
+            : `[L]          <B>${chunk}</B>\n`;
         });
       }
     });
   }
 
   // ── Combo selections (normal font) — wrap at 44 chars ─────────────────────
-  if (item.comboSelections && item.comboSelections.length > 0) {
-    item.comboSelections.forEach(g => {
-      if (Array.isArray(g.items)) {
-        g.items.forEach(opt => {
-          _wrapText(opt.name || '', MOD_WRAP).forEach((chunk, idx) => {
-            text += idx === 0
-              ? `[L]    - ${chunk}\n`
-              : `[L]      ${chunk}\n`;
-          });
+  let comboSels = item.comboSelections;
+  if (!comboSels || (Array.isArray(comboSels) && comboSels.length === 0)) {
+    const rawCombo = item.ComboDetailsJSON || item.comboDetailsJSON || item.ComboDetails || item.comboDetails;
+    if (rawCombo) {
+      if (typeof rawCombo === 'string') {
+        try {
+          const parsed = JSON.parse(rawCombo);
+          comboSels = Array.isArray(parsed) ? parsed : (parsed.groups || parsed.items || []);
+        } catch (e) {
+          comboSels = [];
+        }
+      } else if (Array.isArray(rawCombo)) {
+        comboSels = rawCombo;
+      } else if (typeof rawCombo === 'object') {
+        comboSels = rawCombo.groups || rawCombo.items || [];
+      }
+    }
+  }
+
+  if (Array.isArray(comboSels) && comboSels.length > 0) {
+    comboSels.forEach(g => {
+      const choices = g.items || g.dishes || (Array.isArray(g) ? g : [g]);
+      if (Array.isArray(choices)) {
+        choices.forEach(opt => {
+          const optName = opt.name || opt.DishName || opt.itemName || '';
+          if (optName) {
+            _wrapText(optName, MOD_WRAP).forEach((chunk, idx) => {
+              text += idx === 0
+                ? `[L]        <B>- ${chunk}</B>\n`
+                : `[L]          <B>${chunk}</B>\n`;
+            });
+          }
         });
       }
     });
@@ -195,8 +217,10 @@ function _formatItem(item) {
   // ── Remarks / Note ─────────────────────────────────────────────────────────
   const noteText = item.note || item.notes || item.Remarks || item.remarks;
   if (noteText) {
-    _wrapText(noteText, 44).forEach((chunk, idx) => {
-      text += idx === 0 ? `[L]    * ${chunk}\n` : `[L]      ${chunk}\n`;
+    _wrapText(noteText, MOD_WRAP).forEach((chunk, idx) => {
+      text += idx === 0 
+        ? `[L]        <B>* ${chunk}</B>\n` 
+        : `[L]          <B>${chunk}</B>\n`;
     });
   }
 
