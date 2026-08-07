@@ -65,6 +65,8 @@ async function initDB(pool) {
 
     // 🏆 REWARD POINTS: Add RewardCredit wallet column to MemberMaster
     await runQuery("MemberMaster - RewardCredit", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[MemberMaster]') AND name = 'RewardCredit') ALTER TABLE [dbo].[MemberMaster] ADD RewardCredit DECIMAL(18,4) NOT NULL DEFAULT 0");
+    await runQuery("MemberMaster - Password", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[MemberMaster]') AND name = 'Password') ALTER TABLE [dbo].[MemberMaster] ADD Password NVARCHAR(255) NULL");
+    await runQuery("MemberMaster - CreatedAt", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[MemberMaster]') AND name = 'CreatedAt') ALTER TABLE [dbo].[MemberMaster] ADD CreatedAt DATETIME NULL");
 
     // 🏆 REWARD POINTS: Drop and recreate AvailableCredit computed column to include RewardCredit
     // This updates the formula so AvailableCredit = credit capacity + reward wallet

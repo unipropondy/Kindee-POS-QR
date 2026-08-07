@@ -104,6 +104,7 @@ export default function GeneralSettingsScreen() {
   const [enableOnlinePayment, setEnableOnlinePayment] = useState(settings.enableOnlinePayment !== undefined ? settings.enableOnlinePayment : true);
   const [enableQROrderAutoPrint, setEnableQROrderAutoPrint] = useState(settings.enableQROrderAutoPrint !== undefined ? settings.enableQROrderAutoPrint : true);
   const [enableComboPrint, setEnableComboPrint] = useState(settings.enableComboPrint !== undefined ? settings.enableComboPrint : false);
+  const [enableRequestService, setEnableRequestService] = useState(settings.enableRequestService !== undefined ? settings.enableRequestService : true);
 
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordValue, setPasswordValue] = useState("");
@@ -131,6 +132,7 @@ export default function GeneralSettingsScreen() {
     setEnableOnlinePayment(settings.enableOnlinePayment !== undefined ? settings.enableOnlinePayment : true);
     setEnableQROrderAutoPrint(settings.enableQROrderAutoPrint !== undefined ? settings.enableQROrderAutoPrint : true);
     setEnableComboPrint(settings.enableComboPrint !== undefined ? settings.enableComboPrint : false);
+    setEnableRequestService(settings.enableRequestService !== undefined ? settings.enableRequestService : true);
 
     let initialCheckoutFlow = settings.enableCheckoutFlow;
     let initialDirectProcess = settings.enableDirectProcessToPay;
@@ -219,6 +221,7 @@ export default function GeneralSettingsScreen() {
       enableOnlinePayment,
       enableQROrderAutoPrint,
       enableComboPrint,
+      enableRequestService,
     });
     setSaving(false);
 
@@ -371,6 +374,19 @@ export default function GeneralSettingsScreen() {
           icon: "pricetag-outline",
           value: showPromoCode,
           onToggle: setShowPromoCode,
+        },
+      ]
+    },
+    {
+      title: "QR Customer Experience",
+      icon: "phone-portrait-outline",
+      items: [
+        {
+          title: "Request Service",
+          desc: "Show the Request Service section (Call Waiter, Water, Cutlery, Tissue) on the customer QR order-status page.",
+          icon: "notifications-outline",
+          value: enableRequestService,
+          onToggle: setEnableRequestService,
         },
       ]
     }

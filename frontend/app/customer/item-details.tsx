@@ -239,6 +239,45 @@ export default function CustomerItemDetailsScreen() {
   const handleAddToCart = async () => {
     if (!dish) return;
 
+    // Validate required modifier groups:
+    // Only enforce mandatory selection for groups named "Beverage" or "Dessert"
+    const REQUIRED_GROUP_KEYWORDS = ["beverage", "dessert"];
+
+    const modifierGroupMap: Record<string, any[]> = {};
+    modifiers.forEach((mod) => {
+      const gId = mod.ModifierGroupId || mod.ModifierGroupName || "default";
+      if (!modifierGroupMap[gId]) modifierGroupMap[gId] = [];
+      modifierGroupMap[gId].push(mod);
+    });
+
+    for (const gId of Object.keys(modifierGroupMap)) {
+      const groupMods = modifierGroupMap[gId];
+      const firstMod = groupMods[0];
+      const groupLabel = firstMod?.ModifierGroupName || "Modifiers";
+      const groupNameLower = groupLabel.toLowerCase();
+
+      // Only enforce for Beverage / Dessert groups
+      const isRequiredGroup = REQUIRED_GROUP_KEYWORDS.some((kw) => groupNameLower.includes(kw));
+      if (!isRequiredGroup) continue;
+
+      const maxSel = Number(firstMod?.MaxSelectionCount || 1);
+      const isMulti = Number(firstMod?.MultiselectAllow) === 1 && maxSel > 1;
+      const dbMinSel = Number(firstMod?.MinSelectionCount || 0);
+      const effectiveMinSel = dbMinSel > 0 ? dbMinSel : (!isMulti ? 1 : 0);
+
+      if (effectiveMinSel > 0) {
+        const selectedInGroup = selectedModifiers.filter(
+          (m) => (m.ModifierGroupId || m.ModifierGroupName || "default") === gId
+        ).length;
+        if (selectedInGroup < effectiveMinSel) {
+          setAlertMessage(
+            `Please select at least ${effectiveMinSel} option${effectiveMinSel > 1 ? "s" : ""} for "${groupLabel}".`
+          );
+          return;
+        }
+      }
+    }
+
     let comboSelectionsList: any[] = [];
     let isCombo = false;
     if (comboConfig && comboConfig.groups) {
@@ -433,8 +472,8 @@ export default function CustomerItemDetailsScreen() {
                           <Text style={styles.comboItemName} numberOfLines={2}>{opt.name}</Text>
                           <Text style={[styles.comboItemSurcharge, { color: Number(opt.surcharge) > 0 ? Theme.primary : "#64748B" }]}>
                             {Number(opt.dishPrice || 0) > 0 
-                              ? `$${Number(opt.dishPrice).toFixed(2)} • ${Number(opt.surcharge) > 0 ? `+$${Number(opt.surcharge).toFixed(2)}` : "Included"}`
-                              : (Number(opt.surcharge) > 0 ? `+$${Number(opt.surcharge).toFixed(2)}` : "Included")
+                              ? `$${Number(opt.dishPrice).toFixed(2)}${Number(opt.surcharge) > 0 ? ` • +$${Number(opt.surcharge).toFixed(2)}` : ""}`
+                              : (Number(opt.surcharge) > 0 ? `+$${Number(opt.surcharge).toFixed(2)}` : "")
                             }
                           </Text>
                         </View>
@@ -488,7 +527,7 @@ export default function CustomerItemDetailsScreen() {
                         <View style={{ flex: 1 }}>
                           <Text style={styles.comboItemName} numberOfLines={2}>{displayName}</Text>
                           <Text style={[styles.comboItemSurcharge, { color: Number(displayPrice) > 0 ? Theme.primary : "#64748B" }]}>
-                            {Number(displayPrice) > 0 ? `+$${Number(displayPrice).toFixed(2)}` : "Included"}
+                            {Number(displayPrice) > 0 ? `+$${Number(displayPrice).toFixed(2)}` : ""}
                           </Text>
                         </View>
                       </View>

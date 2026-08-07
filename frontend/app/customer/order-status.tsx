@@ -391,6 +391,7 @@ export default function CustomerOrderStatusScreen() {
   const generalSettings = useGeneralSettingsStore((state: any) => state.settings);
   const currencySymbol = settings?.currencySymbol ?? settings?.CurrencySymbol ?? "$";
   const enableOnlinePayment = generalSettings?.enableOnlinePayment !== false && generalSettings?.EnableOnlinePayment !== false;
+  const enableRequestService = generalSettings?.enableRequestService !== false;
 
   const currentCart = currentContextId ? carts[currentContextId] || [] : [];
   const activeItems = currentCart.filter((item) => item.status && item.status !== "VOIDED");
@@ -946,67 +947,70 @@ export default function CustomerOrderStatusScreen() {
         </View>
 
         {/* Quick Customer Requests */}
-        <Text style={styles.sectionTitle}>Request Service</Text>
-        <View style={styles.requestsGrid}>
-          <Pressable
-            style={({ pressed, hovered }: any) => [
-              styles.requestBtn,
-              hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
-              pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
-            ]}
-            onPress={() => handleSendRequest("Call Waiter")}
-          >
-            <Ionicons name="notifications-outline" size={24} color={Theme.primary} />
-            <Text style={styles.requestBtnText}>Call Waiter</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed, hovered }: any) => [
-              styles.requestBtn,
-              hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
-              pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
-            ]}
-            onPress={() => handleSendRequest("Request Water")}
-          >
-            <Ionicons name="water-outline" size={24} color={Theme.primary} />
-            <Text style={styles.requestBtnText}>Water</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed, hovered }: any) => [
-              styles.requestBtn,
-              hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
-              pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
-            ]}
-            onPress={() => handleSendRequest("Request Spoon/Fork")}
-          >
-            <Ionicons name="restaurant-outline" size={24} color={Theme.primary} />
-            <Text style={styles.requestBtnText}>Cutlery</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed, hovered }: any) => [
-              styles.requestBtn,
-              hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
-              pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
-            ]}
-            onPress={() => handleSendRequest("Request Tissue")}
-          >
-            <Ionicons name="document-text-outline" size={24} color={Theme.primary} />
-            <Text style={styles.requestBtnText}>Tissue</Text>
-          </Pressable>
-          {allServed && (
-            <Pressable
-              style={({ pressed, hovered }: any) => [
-                styles.requestBtn,
-                hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
-                pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
-              ]}
-              onPress={() => handleSendRequest("Request Bill")}
-            >
-              <Ionicons name="wallet-outline" size={24} color={Theme.primary} />
-              <Text style={styles.requestBtnText}>Request Bill</Text>
-            </Pressable>
-          )}
-
-        </View>
+        {enableRequestService && (
+          <>
+            <Text style={styles.sectionTitle}>Request Service</Text>
+            <View style={styles.requestsGrid}>
+              <Pressable
+                style={({ pressed, hovered }: any) => [
+                  styles.requestBtn,
+                  hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
+                  pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
+                ]}
+                onPress={() => handleSendRequest("Call Waiter")}
+              >
+                <Ionicons name="notifications-outline" size={24} color={Theme.primary} />
+                <Text style={styles.requestBtnText}>Call Waiter</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed, hovered }: any) => [
+                  styles.requestBtn,
+                  hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
+                  pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
+                ]}
+                onPress={() => handleSendRequest("Request Water")}
+              >
+                <Ionicons name="water-outline" size={24} color={Theme.primary} />
+                <Text style={styles.requestBtnText}>Water</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed, hovered }: any) => [
+                  styles.requestBtn,
+                  hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
+                  pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
+                ]}
+                onPress={() => handleSendRequest("Request Spoon/Fork")}
+              >
+                <Ionicons name="restaurant-outline" size={24} color={Theme.primary} />
+                <Text style={styles.requestBtnText}>Cutlery</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed, hovered }: any) => [
+                  styles.requestBtn,
+                  hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
+                  pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
+                ]}
+                onPress={() => handleSendRequest("Request Tissue")}
+              >
+                <Ionicons name="document-text-outline" size={24} color={Theme.primary} />
+                <Text style={styles.requestBtnText}>Tissue</Text>
+              </Pressable>
+              {allServed && (
+                <Pressable
+                  style={({ pressed, hovered }: any) => [
+                    styles.requestBtn,
+                    hovered && { backgroundColor: "#FFF8F2", borderColor: Theme.primary, elevation: 3 },
+                    pressed && { backgroundColor: "#FFEFE0", transform: [{ scale: 0.96 }] }
+                  ]}
+                  onPress={() => handleSendRequest("Request Bill")}
+                >
+                  <Ionicons name="wallet-outline" size={24} color={Theme.primary} />
+                  <Text style={styles.requestBtnText}>Request Bill</Text>
+                </Pressable>
+              )}
+            </View>
+          </>
+        )}
 
         {/* Ordered items details */}
         <Text style={styles.sectionTitle}>Order Details</Text>

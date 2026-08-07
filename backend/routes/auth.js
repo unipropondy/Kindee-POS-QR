@@ -24,9 +24,9 @@ async function sendWelcomeEmail({ email, name, phone, promoCode, promoAmount }) 
     
     // Plain text fallback version for email deliverability
     const textContent = `
-Welcome to the Member Club, ${name}.
+Welcome to Kindee, ${name}.
 
-Thank you for registering as a member with Smart POS. Your account has been configured.
+Thank you for registering as a member with Kindee. Your account has been configured.
 
 Your Member Profile:
 Name: ${name}
@@ -36,7 +36,7 @@ ${promoCode ? `Welcome Wallet Credit: Code ${promoCode} (Value: $${promoAmount})
 
 Start ordering here: http://myerpcloud.dyndns.org:8081/customer
 
-Unipro Singapore
+Kindee
 No. 2 Yishun Industrial Street 1, #03-24, North Point Bizhub, Singapore 768159
 Support: support@unipro.com.sg
 Unsubscribe: http://myerpcloud.dyndns.org:8081/customer/unsubscribe
@@ -48,7 +48,7 @@ Unsubscribe: http://myerpcloud.dyndns.org:8081/customer/unsubscribe
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Welcome to the Member Club</title>
+      <title>Welcome to Kindee</title>
       <!--[if mso]>
       <noscript>
         <xml>
@@ -93,7 +93,7 @@ Unsubscribe: http://myerpcloud.dyndns.org:8081/customer/unsubscribe
                   <table border="0" cellpadding="0" cellspacing="0" role="presentation">
                     <tr>
                       <td align="center" style="background-color: rgba(255, 255, 255, 0.15); border-radius: 30px; padding: 6px 16px; display: inline-block; margin-bottom: 16px;">
-                        <span style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: bold; color: #FFFFFF; letter-spacing: 1px; text-transform: uppercase;">Welcome to VIP Club</span>
+                        <span style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: bold; color: #FFFFFF; letter-spacing: 1px; text-transform: uppercase;">Welcome to Kindee</span>
                       </td>
                     </tr>
                     <tr>
@@ -118,7 +118,7 @@ Unsubscribe: http://myerpcloud.dyndns.org:8081/customer/unsubscribe
                       <td>
                         <h2 style="margin: 0 0 12px 0; font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: bold; color: #1E293B;">Hi ${name}</h2>
                         <p style="margin: 0 0 24px 0; font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #475569; line-height: 1.6;">
-                          Welcome to the Unipro VIP Club! You can now enjoy faster QR ordering, instant digital receipts, exclusive member-only offers, reward points, birthday surprises, cashback, and a seamless dining experience.
+                          Welcome to Kindee! You can now enjoy faster QR ordering, instant digital receipts, exclusive member-only offers, reward points, birthday surprises, cashback, and a seamless dining experience.
                         </p>
                       </td>
                     </tr>
@@ -138,7 +138,7 @@ Unsubscribe: http://myerpcloud.dyndns.org:8081/customer/unsubscribe
                               <span style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: bold; color: #FF6A00; text-transform: uppercase; letter-spacing: 1px;">MEMBER CARD</span>
                             </td>
                             <td align="right" valign="middle">
-                              <span style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: bold; color: #1E293B; background-color: #F59E0B; padding: 3px 8px; border-radius: 4px;">GOLD LEVEL</span>
+                              <span style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: bold; color: #1E293B; background-color: #F59E0B; padding: 3px 8px; border-radius: 4px;">MEMBER</span>
                             </td>
                           </tr>
                         </table>
