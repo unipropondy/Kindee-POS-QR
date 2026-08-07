@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Theme } from "../../constants/theme";
 import { API_URL } from "../../constants/Config";
 import * as Print from "expo-print";
+import UniversalPrinter from "../../components/UniversalPrinter";
 
 // QR Code via web service — works on all platforms (web + native)
 // Uses qrserver.com free API to generate QR images
@@ -128,8 +129,15 @@ export default function QRGeneratorScreen() {
     setPrinting(true);
     try {
       const qrUrl = buildQrUrl(table);
-      const base64Qr = await fetchQrAsBase64(qrUrl);
       const sectionName = sectionLabels[table.DiningSection] || "Section 1";
+
+      // 🖨️ Try printing directly to configured cashier receipt printer
+      const directPrinted = await UniversalPrinter.printQRDirect(table.label, sectionName, qrUrl);
+      if (directPrinted) {
+        return;
+      }
+
+      const base64Qr = await fetchQrAsBase64(qrUrl);
 
       const htmlContent = `
         <html>

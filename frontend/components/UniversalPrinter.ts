@@ -2368,6 +2368,66 @@ class UniversalPrinter {
     }
   }
 
+  static async printQRDirect(
+    tableLabel: string,
+    sectionName: string,
+    qrUrl: string,
+    outletId?: string | number
+  ): Promise<boolean> {
+    const payload = `\n[C]================================================\n[C]<font size='big'><B>TABLE QR CODE</B></font>\n[C]================================================\n[C]<font size='big'><B>Table ${tableLabel}</B></font>\n[C]${sectionName}\n[C]\n[C]<qrcode size='15'>${qrUrl}</qrcode>\n[C]\n[C]<font size='normal'><B>Scan to Order</B></font>\n[C]${qrUrl}\n[C]================================================\n\n\n\n`;
+
+    if (Platform.OS === "web") {
+      try {
+        const isOnline = await this.isBridgeOnline();
+        if (!isOnline) return false;
+        return await this.queuePrintJob(1, undefined, payload);
+      } catch {
+        return false;
+      }
+    }
+
+    // Native/Mobile (Android APK/iOS)
+    try {
+      const company = await BillPDFGenerator.loadSettings(outletId);
+      let cashierIp = "";
+      try {
+        const response = await fetch(`${API_URL}/api/settings/kitchen-printers`);
+        const printers = await response.json();
+        if (Array.isArray(printers)) {
+          const cashierPrinter = printers.find((p) => p.PrinterType === 1);
+          cashierIp = cashierPrinter?.PrinterPath || "";
+        }
+      } catch (err) {
+        console.warn("Failed to fetch printer IPs from PrintMaster:", err);
+      }
+
+      const targetIp = cashierIp || company.printerIp || "";
+      if (!targetIp || targetIp.trim().length === 0) {
+        return false;
+      }
+
+      const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(targetIp.trim());
+      if (isIp) {
+        await ThermalPrinter.printTcp({
+          ip: targetIp.trim(),
+          port: 9100,
+          payload,
+          mmFeedPaper: 60,
+        });
+      } else {
+        await ThermalPrinter.printBluetooth({
+          macAddress: targetIp.trim(),
+          payload,
+          mmFeedPaper: 60,
+        });
+      }
+      return true;
+    } catch (e) {
+      console.warn("Native printQRDirect failed:", e);
+      return false;
+    }
+  }
+
   static async testAllPrinters(): Promise<void> {
     const printers = await this.detectAllPrinters();
     let message = `📋 Found ${printers.length} printer(s):\n\n`;

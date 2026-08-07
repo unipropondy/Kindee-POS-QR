@@ -190,9 +190,19 @@ function CustomDateTimePicker({ visible, onClose, selectedDate, onApply, title }
                     <Ionicons name="chevron-back" size={16} color="#44403C" />
                   </TouchableOpacity>
                   <Text style={pickerStyles.monthYearText}>{monthNames[month]} {year}</Text>
-                  <TouchableOpacity onPress={nextMonth} style={pickerStyles.navBtn}>
-                    <Ionicons name="chevron-forward" size={16} color="#44403C" />
-                  </TouchableOpacity>
+                  {(() => {
+                    const todayVal = new Date();
+                    const isCurrentMonthOrFuture = year > todayVal.getFullYear() || (year === todayVal.getFullYear() && month >= todayVal.getMonth());
+                    return (
+                      <TouchableOpacity 
+                        onPress={nextMonth} 
+                        disabled={isCurrentMonthOrFuture} 
+                        style={[pickerStyles.navBtn, isCurrentMonthOrFuture && { opacity: 0.25 }]}
+                      >
+                        <Ionicons name="chevron-forward" size={16} color="#44403C" />
+                      </TouchableOpacity>
+                    );
+                  })()}
                 </View>
 
                 {/* Weekdays Row */}
@@ -209,19 +219,27 @@ function CustomDateTimePicker({ visible, onClose, selectedDate, onApply, title }
                       selectedDay.getMonth() === dObj.month &&
                       selectedDay.getFullYear() === dObj.year;
 
+                    const today = new Date();
+                    today.setHours(23, 59, 59, 999);
+                    const cellDate = new Date(dObj.year, dObj.month, dObj.day);
+                    const isFuture = cellDate > today;
+
                     return (
                       <TouchableOpacity
                         key={idx}
                         onPress={() => handleDaySelect(dObj)}
+                        disabled={isFuture}
                         style={[
                           pickerStyles.dayBtn,
-                          isSelected && pickerStyles.dayBtnSelected
+                          isSelected && pickerStyles.dayBtnSelected,
+                          isFuture && { opacity: 0.25 }
                         ]}
                       >
                         <Text style={[
                           pickerStyles.dayText,
                           !dObj.isCurrentMonth && pickerStyles.dayTextInactive,
-                          isSelected && pickerStyles.dayTextSelected
+                          isSelected && pickerStyles.dayTextSelected,
+                          isFuture && { color: '#D1D5DB' }
                         ]}>
                           {dObj.day}
                         </Text>
@@ -811,6 +829,7 @@ const loadDishes = async () => {
   const sysCash = salesCash + transactionsTotal;
 
   const totalCashIn = salesCash + displayOpeningAmount + totalCashInEntries + transactions.filter(t => t.TransactionType === "IN").reduce((sum, t) => sum + (parseFloat(t.Amount) || 0), 0);
+  const uiTotalIn = paymentsTotal + displayOpeningAmount + totalCashInEntries + transactions.filter(t => t.TransactionType === "IN").reduce((sum, t) => sum + (parseFloat(t.Amount) || 0), 0);
   const totalCashOutSum = totalCashOut + transactions.filter(t => t.TransactionType === "OUT").reduce((sum, t) => sum + (parseFloat(t.Amount) || 0), 0);
 
   const handleFinalize = async () => {
@@ -1919,7 +1938,7 @@ const loadDishes = async () => {
                     <Text style={{ fontFamily: Fonts.black, fontSize: 14, color: Theme.primaryDark }}>TOTAL</Text>
                   </View>
                   <Text style={{ flex: 1, textAlign: "right", fontFamily: Fonts.black, fontSize: 14, color: Theme.success }}>
-                    {formatCurrency(totalCashIn)}
+                    {formatCurrency(uiTotalIn)}
                   </Text>
                   <Text style={{ flex: 1, textAlign: "right", fontFamily: Fonts.black, fontSize: 14, color: Theme.danger }}>
                     {formatCurrency(totalCashOutSum)}
@@ -1928,9 +1947,9 @@ const loadDishes = async () => {
                 <View style={{ flexDirection: "row", paddingVertical: 10, paddingHorizontal: 12, backgroundColor: "#F9FAFB", borderTopWidth: 1, borderTopColor: "#E5E7EB", alignItems: "center" }}>
                   <View style={{ flex: 2, alignItems: 'flex-end', paddingRight: 15 }}>
                     <Text style={{ fontFamily: Fonts.black, fontSize: 13, color: Theme.textSecondary }}>NET AMOUNT</Text>
-</View>
-                  <Text style={{ flex: 2, textAlign: "right", fontFamily: Fonts.black, fontSize: 14, color: (totalCashIn - totalCashOutSum) >= 0 ? Theme.success : Theme.danger }}>
-                    {formatCurrency(totalCashIn - totalCashOutSum)}
+                  </View>
+                  <Text style={{ flex: 2, textAlign: "right", fontFamily: Fonts.black, fontSize: 14, color: (uiTotalIn - totalCashOutSum) >= 0 ? Theme.success : Theme.danger }}>
+                    {formatCurrency(uiTotalIn - totalCashOutSum)}
                   </Text>
                 </View>
               </View>
