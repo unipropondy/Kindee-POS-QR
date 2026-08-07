@@ -159,7 +159,12 @@ router.get("/config/:DishId", async (req, res) => {
           ELSE ISNULL(ISNULL(ckt.KitchenTypeName, cat.CategoryName), 'KITCHEN')
         END as KitchenTypeName,
         CASE 
-          WHEN ISNULL(ckt.KitchenTypeName, cat.CategoryName) IN ('Add Ons', 'ADD ONS') THEN '192.168.68.178'
+          WHEN ISNULL(ckt.KitchenTypeName, cat.CategoryName) IN ('Add Ons', 'ADD ONS') 
+            THEN COALESCE(
+              (SELECT TOP 1 PrinterPath FROM PrintMaster WHERE PrinterType = 1 AND IsActive = 1),
+              (SELECT TOP 1 PrinterIP FROM PrintMaster WHERE PrinterType = 1 AND IsActive = 1),
+              '127.0.0.1'
+            )
           ELSE pm.PrinterPath
         END AS PrinterIP
       FROM ComboGroupDishMapping m WITH (NOLOCK)

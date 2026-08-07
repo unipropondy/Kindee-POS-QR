@@ -298,15 +298,29 @@ async function generateAndQueueKOTs(orderId) {
     }
 
     // 3. Group Items by Printer Name (to keep KOT slips separated by kitchen type)
-    let fallbackKitchenIp = '192.168.68.184';
+    let fallbackKitchenIp = '127.0.0.1';
     try {
         const fallbackRes = await pool.request().query(`
-            SELECT TOP 1 PrinterPath 
+            SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterPath 
             FROM PrintMaster 
-            WHERE PrinterType = 2 AND IsActive = 1 AND PrinterPath IS NOT NULL AND PrinterPath <> ''
+            WHERE PrinterType = 2 AND IsActive = 1 AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')
         `);
         if (fallbackRes.recordset.length > 0) {
             fallbackKitchenIp = fallbackRes.recordset[0].PrinterPath;
+        } else {
+            const cashierRes = await pool.request().query(`
+                SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterPath 
+                FROM PrintMaster 
+                WHERE PrinterType = 1 AND IsActive = 1
+            `);
+            if (cashierRes.recordset.length > 0) {
+                fallbackKitchenIp = cashierRes.recordset[0].PrinterPath;
+            } else {
+                const cs = await pool.request().query("SELECT TOP 1 PrinterIP FROM CompanySettings WHERE PrinterIP IS NOT NULL AND PrinterIP <> ''");
+                if (cs.recordset[0]?.PrinterIP) {
+                    fallbackKitchenIp = cs.recordset[0].PrinterIP;
+                }
+            }
         }
     } catch (err) {
         console.error("[generateAndQueueKOTs] Fallback IP fetch error:", err.message);
@@ -505,12 +519,20 @@ async function generateAndQueueReceipt(orderId, paymentMode = 'ONLINE') {
     const pType = isTakeaway ? 3 : 1;
 
     // 5. Fetch Printer IP
-    let printerIp = '192.168.68.178';
+    let printerIp = '127.0.0.1';
     let printerName = 'Counter Printer';
+    
+    // Fetch CompanySettings default first as initial fallback
+    try {
+        const cs = await pool.request().query("SELECT TOP 1 PrinterIP FROM CompanySettings WHERE PrinterIP IS NOT NULL AND PrinterIP <> ''");
+        if (cs.recordset[0]?.PrinterIP) {
+            printerIp = cs.recordset[0].PrinterIP;
+        }
+    } catch (_) {}
     
     const printerRes = await pool.request()
         .input('PrinterType', sql.Int, pType)
-        .query(`SELECT TOP 1 PrinterIP, PrinterName FROM PrintMaster WHERE PrinterType = @PrinterType AND IsActive = 1`);
+        .query(`SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName FROM PrintMaster WHERE PrinterType = @PrinterType AND IsActive = 1 AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')`);
         
     if (printerRes.recordset.length > 0 && printerRes.recordset[0].PrinterIP) {
         printerIp = printerRes.recordset[0].PrinterIP;
@@ -518,7 +540,7 @@ async function generateAndQueueReceipt(orderId, paymentMode = 'ONLINE') {
     } else {
         // Ultimate fallback to Cashier
         const cashierRes = await pool.request()
-            .query(`SELECT TOP 1 PrinterIP, PrinterName FROM PrintMaster WHERE PrinterType = 1 AND IsActive = 1`);
+            .query(`SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName FROM PrintMaster WHERE PrinterType = 1 AND IsActive = 1 AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')`);
         if (cashierRes.recordset.length > 0 && cashierRes.recordset[0].PrinterIP) {
             printerIp = cashierRes.recordset[0].PrinterIP;
             printerName = cashierRes.recordset[0].PrinterName;
