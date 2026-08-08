@@ -1668,10 +1668,11 @@ export default function Category() {
     return (
       <View style={isFloating ? {
         position: "absolute",
-        bottom: Math.max(insets.bottom, 16),
+        bottom: isWindows ? 16 : Math.max(insets.bottom, 16) + 85,
         left: Math.max(insets.left, 16) + 8,
         backgroundColor: "transparent",
         pointerEvents: "none",
+        zIndex: 9999,
       } : {
         paddingHorizontal: PADDING,
         paddingTop: 16,
