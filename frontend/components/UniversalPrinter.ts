@@ -1273,17 +1273,22 @@ class UniversalPrinter {
 
     // ── HEADER ────────────────────────────────────────────────────────
     let text = "";
+    // 25mm top side white space (approx 6 empty lines)
+    text += "[L]\n".repeat(6);
     text += `[C]<font size="big"><B>${title}</B></font>\n`;
-    text += `[C]<B>${kotDateStr}  ${kotTimeStr}</B>\n`;
+    text += `[C]<font size="big"><B>${kotDateStr}  ${kotTimeStr}</B></font>\n`;
     text += DIV;
 
-    if (type !== "KDS_PRINT") {
-      // KOT: TABLE bold large at the TOP
+    // TABLE visible at top for both KOT and KDS
+    if (type === "KDS_PRINT") {
+      text += `[C]<font size="big"><B>TABLE NO : ${tableNo}</B></font>\n`;
+      text += DIV;
+    } else {
       text += `[C]<font size="big"><B>TABLE : ${tableNo}</B></font>\n`;
       text += DIV;
     }
 
-    text += "[L]QTY  ITEM\n";
+    text += "[L]<font size=\"big\"><B>QTY  ITEM</B></font>\n";
     text += DIV;
 
     // ── ITEMS ─────────────────────────────────────────────────────────
@@ -1315,15 +1320,10 @@ class UniversalPrinter {
     }
 
     // ── FOOTER ────────────────────────────────────────────────────────
-    text += `[L]Order By : ${waiter}\n`;
-    text += `[L]Order No : ${orderNo}\n`;
+    text += `[L]<font size="big"><B>Order By : ${waiter}</B></font>\n`;
+    text += `[L]<font size="big"><B>Order No : ${orderNo}</B></font>\n`;
 
-    if (type === "KDS_PRINT") {
-      // KDS: TABLE NUMBER big at the BOTTOM
-      text += DIV;
-      text += `[C]<font size="big"><B>TABLE NO : ${tableNo}</B></font>\n`;
-      text += DIV;
-    } else {
+    if (type !== "KDS_PRINT") {
       // KOT: Kitchen Name + Table Number always at the very bottom
       const kotLabel = kitchenName && kitchenName !== "KDS"
         ? (tableNo && tableNo !== "N/A"

@@ -3651,7 +3651,7 @@ export default function Category() {
         contentContainerStyle={{
           gap: GAP,
           paddingHorizontal: PADDING,
-          paddingBottom: isWindows ? 40 : (isTablet ? 160 : 40),
+          paddingBottom: isTablet ? 160 : 100,
           paddingTop: 8,
         }}
         showsVerticalScrollIndicator={false}
@@ -3669,7 +3669,7 @@ export default function Category() {
             </TouchableOpacity>
           </View>
         }
-        ListFooterComponent={!isWindows ? renderLicenseView(false) : null}
+        ListFooterComponent={null}
       />
       {/* 〰〰〰〰〰〰〰〰〰〰〰 CUSTOMER GUEST & PAX MODAL 〰〰〰〰〰〰〰〰〰〰〰 */}
       <Modal
@@ -4639,7 +4639,7 @@ export default function Category() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {isWindows && renderLicenseView(true)}
+      {renderLicenseView(true)}
     </SafeAreaView>
   );
 }

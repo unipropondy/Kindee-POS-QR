@@ -34,17 +34,22 @@ function formatKOTThermalText(data, type = 'NEW') {
 
   // ── HEADER ──────────────────────────────────────────────────────────
   let text = '';
+  // 25mm top side white space (approx 6 empty lines)
+  text += '[L]\n'.repeat(6);
   text += `[C]<font size="big"><B>${title}</B></font>\n`;
-  text += `[C]<B>${dateStr}  ${timeStr}</B>\n`;
+  text += `[C]<font size="big"><B>${dateStr}  ${timeStr}</B></font>\n`;
   text += DIV;
 
-  if (type !== 'KDS_PRINT') {
-    // KOT: TABLE visible at top
+  // TABLE visible at top for both KOT and KDS
+  if (type === 'KDS_PRINT') {
+    text += `[C]<font size="big"><B>TABLE NO : ${tableNo}</B></font>\n`;
+    text += DIV;
+  } else {
     text += `[C]<font size="big"><B>TABLE : ${tableNo}</B></font>\n`;
     text += DIV;
   }
 
-  text += '[L]QTY  ITEM\n';
+  text += '[L]<font size="big"><B>QTY  ITEM</B></font>\n';
   text += DIV;
 
   // ── ITEMS ───────────────────────────────────────────────────────────
@@ -77,15 +82,10 @@ function formatKOTThermalText(data, type = 'NEW') {
   }
 
   // ── FOOTER ──────────────────────────────────────────────────────────
-  text += `[L]Order By : ${waiter}\n`;
-  text += `[L]Order No : ${orderNo}\n`;
+  text += `[L]<font size="big"><B>Order By : ${waiter}</B></font>\n`;
+  text += `[L]<font size="big"><B>Order No : ${orderNo}</B></font>\n`;
 
-  if (type === 'KDS_PRINT') {
-    // KDS: TABLE big at the bottom
-    text += DIV;
-    text += `[C]<font size="big"><B>TABLE NO : ${tableNo}</B></font>\n`;
-    text += DIV;
-  } else {
+  if (type !== 'KDS_PRINT') {
     // KOT: Kitchen Name + Table Number always at the very bottom
     const kotLabel = kitchenName && kitchenName !== 'KDS'
       ? (tableNo && tableNo !== 'N/A'
@@ -141,36 +141,35 @@ function _formatItem(item) {
   const qtyNum   = item.quantity || item.qty || 1;
   const itemName = item.name     || item.DishName || '';
 
-  // ── Item name: qty is big+bold, name is normal bold (48 chars wide, minus "[n] " = 44) ──
-  const DISH_WRAP = 40;   // normal font: 48 chars wide, minus "[n] " prefix
-  const MOD_WRAP  = 44;   // normal font: 48 chars wide, minus "  + " prefix
+  // ── Item name: big font, bold, wrapped at 19 chars ──
+  const DISH_WRAP = 19;
+  const BIG_MOD_WRAP = 20;   // big-font chars available for modifiers (24 - 4 chars margin/prefix)
 
   _wrapText(itemName.replace(/\n/g, ' '), DISH_WRAP).forEach((chunk, idx) => {
     if (idx === 0) {
-      // First line: qty in big bold + name in normal bold on same logical line
-      text += `[L]<font size="big"><B>[${qtyNum}]</B></font> <B>${chunk}</B>\n`;
+      text += `[L]<font size="big"><B>[${qtyNum}] ${chunk}</B></font>\n`;
     } else {
-      text += `[L]     <B>${chunk}</B>\n`;
+      text += `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
     }
   });
 
   // ── Song name ──────────────────────────────────────────────────────────────
   const songName = item.songName || item.SongName || '';
-  if (songName) text += `[L]  <B>♪ ${songName}</B>\n`;
+  if (songName) text += `[L]<font size="big"><B>  ♪ ${songName}</B></font>\n`;
 
   // ── Takeaway flag ──────────────────────────────────────────────────────────
   const isTakeaway = !!(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
   if (isTakeaway) text += `[L]<font size="big"><B>  >> TAKEAWAY <<</B></font>\n`;
 
-  // ── Modifiers (normal font, bold) — wrap at 44 chars ─────────────────────────
+  // ── Modifiers (big font, bold) — wrap at 20 chars ────────────────────
   if (item.modifiers && item.modifiers.length > 0) {
     item.modifiers.forEach(m => {
       const modName = m.ModifierName || m.modifierName || m.name || m.ModifierNameEn || '';
       if (modName) {
-        _wrapText(modName, MOD_WRAP).forEach((chunk, idx) => {
+        _wrapText(modName, BIG_MOD_WRAP).forEach((chunk, idx) => {
           text += idx === 0
-            ? `[L]  <B>+ ${chunk}</B>\n`
-            : `[L]    <B>${chunk}</B>\n`;
+            ? `[L]<font size="big"><B>  + ${chunk}</B></font>\n`
+            : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
         });
       }
     });
@@ -203,10 +202,10 @@ function _formatItem(item) {
         choices.forEach(opt => {
           const optName = opt.name || opt.DishName || opt.itemName || '';
           if (optName) {
-            _wrapText(optName, MOD_WRAP).forEach((chunk, idx) => {
+            _wrapText(optName, BIG_MOD_WRAP).forEach((chunk, idx) => {
               text += idx === 0
-                ? `[L]  <B>- ${chunk}</B>\n`
-                : `[L]    <B>${chunk}</B>\n`;
+                ? `[L]<font size="big"><B>  - ${chunk}</B></font>\n`
+                : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
             });
           }
         });
@@ -217,10 +216,10 @@ function _formatItem(item) {
   // ── Remarks / Note ─────────────────────────────────────────────────────────
   const noteText = item.note || item.notes || item.Remarks || item.remarks;
   if (noteText) {
-    _wrapText(noteText, MOD_WRAP).forEach((chunk, idx) => {
+    _wrapText(noteText, BIG_MOD_WRAP).forEach((chunk, idx) => {
       text += idx === 0 
-        ? `[L]  <B>* ${chunk}</B>\n` 
-        : `[L]    <B>${chunk}</B>\n`;
+        ? `[L]<font size="big"><B>  * ${chunk}</B></font>\n` 
+        : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
     });
   }
 
