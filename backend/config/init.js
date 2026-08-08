@@ -1018,6 +1018,29 @@ async function initDB(pool) {
 // ============================================================
 async function syncKitchensToPrintMaster(pool) {
   try {
+    // --- 0. DEDUP: Remove duplicate PrintMaster rows on every startup ---
+    // Keeps the single best row per (PrinterType, KitchenTypeValue):
+    //   • Prefer rows where PrinterIP is non-empty (so settings aren't lost)
+    //   • Among ties, keep the first inserted GUID (lowest value)
+    const dedupResult = await pool.request().query(`
+      WITH Ranked AS (
+        SELECT PrinterId,
+               ROW_NUMBER() OVER (
+                 PARTITION BY PrinterType, KitchenTypeValue
+                 ORDER BY
+                   CASE WHEN ISNULL(PrinterIP,'') <> '' THEN 0 ELSE 1 END,
+                   PrinterId
+               ) AS rn
+        FROM PrintMaster
+      )
+      DELETE FROM PrintMaster
+      WHERE PrinterId IN (SELECT PrinterId FROM Ranked WHERE rn > 1)
+    `);
+    const deleted = dedupResult.rowsAffected?.[0] ?? 0;
+    if (deleted > 0) {
+      console.log(`🧹 [KitchenSync] Removed ${deleted} duplicate PrintMaster row(s).`);
+    }
+
     // --- 1. Ensure default Cashier Printer (PrinterType = 1) ---
     const cashierCheck = await pool.request()
       .query("SELECT COUNT(*) as cnt FROM PrintMaster WHERE PrinterType = 1 AND IsActive = 1");
