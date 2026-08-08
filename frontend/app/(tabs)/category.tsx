@@ -1668,7 +1668,7 @@ export default function Category() {
     return (
       <View style={isFloating ? {
         position: "absolute",
-        bottom: isWindows ? 16 : Math.max(insets.bottom, 16) + 85,
+        bottom: isWindows ? 16 : Math.max(insets.bottom, 16) + 24,
         left: Math.max(insets.left, 16) + 8,
         backgroundColor: "transparent",
         pointerEvents: "none",
@@ -1690,7 +1690,7 @@ export default function Category() {
           borderWidth: 1.2,
           borderColor: "#E2E8F0",
           maxWidth: 420,
-          width: "100%",
+          width: isFloating ? 320 : "100%",
           gap: 12,
           shadowColor: "#0F172A",
           shadowOffset: { width: 0, height: 1 },
