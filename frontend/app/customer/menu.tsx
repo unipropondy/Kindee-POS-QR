@@ -786,6 +786,7 @@ export default function CustomerMenuScreen() {
         comboSelections: [],
         modifiers: [],
         status: "NEW",
+        isServiceCharge: dish.isServiceCharge !== undefined ? dish.isServiceCharge : 1,
       });
       Alert.alert("Added to Cart", `${dish.Name} has been added to your cart.`);
     }

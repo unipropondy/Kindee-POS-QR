@@ -297,7 +297,7 @@ const normalizeCartItem = (item: any, fallback: Partial<CartItem> = {}): CartIte
     PrinterIP: item.PrinterIP || fallback.PrinterIP,
     KitchenTypeCode: item.KitchenTypeCode || fallback.KitchenTypeCode,
     IsOpenItem: item.IsOpenItem !== undefined ? item.IsOpenItem : fallback.IsOpenItem,
-    isServiceCharge: item.isServiceCharge !== undefined ? item.isServiceCharge : (fallback.isServiceCharge !== undefined ? fallback.isServiceCharge : 0),
+    isServiceCharge: item.isServiceCharge !== undefined ? (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true ? 1 : 0) : (fallback.isServiceCharge !== undefined ? (Number(fallback.isServiceCharge) === 1 || fallback.isServiceCharge === true ? 1 : 0) : 1),
     isCombo: getNormalizedBoolean(item.isCombo, item.IsCombo, item.ComboDetailsJSON, fallback.isCombo),
     comboSelections: incomingComboSelections || _comboGroups || fallback.comboSelections || undefined,
     IsDiscountAllowed: item.IsDiscountAllowed !== undefined ? item.IsDiscountAllowed : (fallback.IsDiscountAllowed !== undefined ? fallback.IsDiscountAllowed : 1),
