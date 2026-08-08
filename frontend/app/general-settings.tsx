@@ -255,6 +255,20 @@ export default function GeneralSettingsScreen() {
           value: enableOnlinePayment,
           onToggle: setEnableOnlinePayment,
         },
+        {
+          title: "Request Service",
+          desc: "Show the Request Service section (Call Waiter, Water, Cutlery, Tissue) on the customer QR order-status page.",
+          icon: "notifications-outline",
+          value: enableRequestService,
+          onToggle: setEnableRequestService,
+        },
+        {
+          title: "Cooking Instructions",
+          desc: "Show the Cooking Instructions input section on the customer QR order cart page.",
+          icon: "pencil-outline",
+          value: enableCookingInstructions,
+          onToggle: setEnableCookingInstructions,
+        },
       ]
     },
     {
@@ -377,26 +391,6 @@ export default function GeneralSettingsScreen() {
           icon: "pricetag-outline",
           value: showPromoCode,
           onToggle: setShowPromoCode,
-        },
-      ]
-    },
-    {
-      title: "QR Customer Experience",
-      icon: "phone-portrait-outline",
-      items: [
-        {
-          title: "Request Service",
-          desc: "Show the Request Service section (Call Waiter, Water, Cutlery, Tissue) on the customer QR order-status page.",
-          icon: "notifications-outline",
-          value: enableRequestService,
-          onToggle: setEnableRequestService,
-        },
-        {
-          title: "Cooking Instructions",
-          desc: "Show the Cooking Instructions input section on the customer QR order cart page.",
-          icon: "pencil-outline",
-          value: enableCookingInstructions,
-          onToggle: setEnableCookingInstructions,
         },
       ]
     }
