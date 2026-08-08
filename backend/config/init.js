@@ -1019,16 +1019,18 @@ async function initDB(pool) {
 async function syncKitchensToPrintMaster(pool) {
   try {
     // --- 0. DEDUP: Remove duplicate PrintMaster rows on every startup ---
-    // Keeps the single best row per (PrinterType, KitchenTypeValue):
-    //   • Prefer rows where PrinterIP is non-empty (so settings aren't lost)
-    //   • Among ties, keep the first inserted GUID (lowest value)
+    // Duplicates share the same KitchenTypeName but got different KitchenTypeValue codes
+    // over multiple server restarts. Keep the BEST row per (PrinterType, KitchenTypeName):
+    //   • Prefer rows where PrinterIP is non-empty (so configured IPs are preserved)
+    //   • Among ties, keep the lowest KitchenTypeValue (the original assignment)
     const dedupResult = await pool.request().query(`
       WITH Ranked AS (
-        SELECT PrinterId,
+        SELECT PrinterId, PrinterType, KitchenTypeName, KitchenTypeValue,
                ROW_NUMBER() OVER (
-                 PARTITION BY PrinterType, KitchenTypeValue
+                 PARTITION BY PrinterType, KitchenTypeName
                  ORDER BY
                    CASE WHEN ISNULL(PrinterIP,'') <> '' THEN 0 ELSE 1 END,
+                   KitchenTypeValue ASC,
                    PrinterId
                ) AS rn
         FROM PrintMaster
@@ -1041,6 +1043,18 @@ async function syncKitchensToPrintMaster(pool) {
       console.log(`🧹 [KitchenSync] Removed ${deleted} duplicate PrintMaster row(s).`);
     }
 
+    // --- 0b. Realign CategoryKitchenType codes to match surviving PrintMaster rows ---
+    // After dedup the surviving row may have a different KitchenTypeValue than what
+    // CategoryKitchenType stores, which would cause the sync to keep re-inserting rows.
+    await pool.request().query(`
+      UPDATE ckt
+      SET ckt.KitchenTypeCode = CAST(pm.KitchenTypeValue AS NVARCHAR(50))
+      FROM CategoryKitchenType ckt
+      JOIN CategoryMaster cm ON ckt.CategoryId = cm.CategoryId
+      JOIN PrintMaster pm ON pm.KitchenTypeName = cm.CategoryName AND pm.PrinterType = 2
+      WHERE ckt.KitchenTypeCode IS NOT NULL
+        AND CAST(ckt.KitchenTypeCode AS INT) <> pm.KitchenTypeValue
+    `);
     // --- 1. Ensure default Cashier Printer (PrinterType = 1) ---
     const cashierCheck = await pool.request()
       .query("SELECT COUNT(*) as cnt FROM PrintMaster WHERE PrinterType = 1 AND IsActive = 1");
