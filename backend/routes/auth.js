@@ -388,7 +388,7 @@ router.post("/login", async (req, res) => {
     const password = (rawPassword || "").trim();
 
     if (!userName || !password) {
-      return res.status(400).json({ success: false, message: "User ID and Password are required." });
+      return res.status(400).json({ success: false, message: "Email ID/Mobile Number and Password are required." });
     }
 
     console.log(`[AUTH] Attempting login for UserName: "${userName}"`);
@@ -430,7 +430,12 @@ router.post("/login", async (req, res) => {
                   END
               ) AS AvailableCredit
           FROM MemberMaster M
-          WHERE (M.Name = @username OR M.Email = @username)
+          WHERE (
+            M.Email = @username 
+            OR M.Phone = @username 
+            OR REPLACE(REPLACE(M.Phone, ' ', ''), '-', '') = REPLACE(REPLACE(@username, ' ', ''), '-', '')
+            OR (LEN(REPLACE(REPLACE(@username, ' ', ''), '-', '')) >= 8 AND REPLACE(REPLACE(M.Phone, ' ', ''), '-', '') LIKE '%' + REPLACE(REPLACE(@username, ' ', ''), '-', ''))
+          )
             AND M.Password = @password
             AND M.IsActive = 1
         `);

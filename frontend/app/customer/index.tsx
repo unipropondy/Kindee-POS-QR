@@ -277,7 +277,7 @@ export default function CustomerWelcomeScreen() {
 
   const handleSignIn = async () => {
     if (!loginUsername.trim() || !loginPassword.trim()) {
-      showPopup("Error", "Please enter your username and password.");
+      showPopup("Error", "Please enter your Email/Mobile Number and Password.");
       return;
     }
     setAuthLoading(true);
@@ -451,9 +451,9 @@ export default function CustomerWelcomeScreen() {
           {/* ═══════════════ SIGN IN ═══════════════ */}
           {activeTab === "signin" && (
             <View style={styles.formContainer}>
-              <CardField
-                label="Email ID or Username*"
-                placeholder="valentino@gmail.com"
+               <CardField
+                label="Email ID or Mobile Number*"
+                placeholder="Email or Mobile Number"
                 value={loginUsername}
                 onChangeText={setLoginUsername}
                 icon="mail-outline"
