@@ -327,7 +327,7 @@ Unsubscribe: http://myerpcloud.dyndns.org:8081/customer/unsubscribe
                     </tr>
                     <tr>
                       <td style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #64748B; padding-bottom: 16px;">
-                        Support: <a href="mailto:support@unipro.com.sg" style="color: #FF6A00; text-decoration: none;">support@unipro.com.sg</a> &bull; Website: <a href="https://unipro.com.sg" target="_blank" style="color: #FF6A00; text-decoration: none;">unipro.com.sg</a>
+                        Support: <a href="mailto:support@unipro.com.sg" style="color: #FF6A00; text-decoration: none;">support@unipro.com.sg</a> &bull; Website: <a href="https://uniprosg.com" target="_blank" style="color: #FF6A00; text-decoration: none;">uniprosg.com</a>
                       </td>
                     </tr>
                     <tr>
