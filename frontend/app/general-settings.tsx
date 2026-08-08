@@ -257,7 +257,7 @@ export default function GeneralSettingsScreen() {
         },
         {
           title: "Request Service",
-          desc: "Show the Request Service section (Call Waiter, Water, Cutlery, Tissue) on the customer QR order-status page.",
+          desc: "Show the Request Service section (Call Waiter, Water, Cutlery, Tissue, Request Bill) on the customer QR order-status page.",
           icon: "notifications-outline",
           value: enableRequestService,
           onToggle: setEnableRequestService,
