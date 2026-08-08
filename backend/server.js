@@ -90,10 +90,25 @@ io.on("connection", (socket) => {
     io.emit("new_order", data);
   });
 
-  // 🚀 INSTANT SYNC: Relay cart changes between tablets without DB lag
+  // 🚀 INSTANT SYNC: Relay cart changes between tablets in the same table room without DB lag
+  socket.on("join_table", ({ tableId }) => {
+    if (!tableId) return;
+    const cleanTableId = String(tableId).replace(/^\{|\}$/g, "").trim().toLowerCase();
+    const room = `table_${cleanTableId}`;
+    socket.join(room);
+    console.log(`🔌 [Server] Socket ${socket.id} joined table room: ${room}`);
+  });
+
   socket.on("cart_change", (data) => {
-    console.log("🛒 [Server] Cart change relay:", data.tableId);
-    io.emit("cart_change", data);
+    if (data.tableId) {
+      const cleanTableId = String(data.tableId).replace(/^\{|\}$/g, "").trim().toLowerCase();
+      const room = `table_${cleanTableId}`;
+      console.log(`🛒 [Server] Cart change relay for room ${room}`);
+      socket.to(room).emit("cart_change", data);
+    } else {
+      console.log("🛒 [Server] Cart change relay (no tableId):", data.tableId);
+      io.emit("cart_change", data);
+    }
   });
 
   // Broadcast status updates (e.g. order completed, items voided)

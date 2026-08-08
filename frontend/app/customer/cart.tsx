@@ -235,6 +235,7 @@ export default function CustomerCartScreen() {
     if (!orderContext?.tableId) return;
     const tableId = String(orderContext.tableId).replace(/^\{|\}$/g, "").trim().toLowerCase();
     const { socket: sharedSocket } = require("../../constants/socket");
+    sharedSocket.emit("join_table", { tableId });
 
     const handleCartUpdated = (data: { tableId: string; source?: string }) => {
       const incomingId = String(data.tableId || "").replace(/^\{|\}$/g, "").trim().toLowerCase();

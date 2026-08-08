@@ -481,6 +481,8 @@ export default function CustomerOrderStatusScreen() {
 
   useEffect(() => {
     if (!orderContext?.tableId) return;
+    const tableId = String(orderContext.tableId).replace(/^\{|\}$/g, "").trim().toLowerCase();
+    socket.emit("join_table", { tableId });
 
     const handleOrderClosed = (payload: { tableId?: string }) => {
       const cleanTarget = String(payload.tableId || "").replace(/^\{|\}$/g, "").trim().toLowerCase();
