@@ -1623,7 +1623,7 @@ router.post("/cancel", async (req, res) => {
         SELECT h.OrderId, h.OrderNumber, RTRIM(LTRIM(h.Tableno)) AS Tableno, h.BusinessUnitId, h.CreatedBy, h.MobileNo,
                tm.DiningSection, tm.TableId, h.start_date
         FROM RestaurantOrderCur h
-        LEFT JOIN TableMaster tm ON h.Tableno = tm.TableNumber
+        LEFT JOIN TableMaster tm ON RTRIM(LTRIM(h.Tableno)) = RTRIM(LTRIM(tm.TableNumber))
         WHERE h.OrderNumber = @oid AND (h.isOrderClosed = 0 OR h.isOrderClosed IS NULL)
       `);
 
@@ -2018,7 +2018,7 @@ router.post("/update-item-status", async (req, res) => {
         SELECT h.OrderNumber, tm.TableId 
         FROM RestaurantOrderDetailCur d 
         JOIN RestaurantOrderCur h ON d.OrderId = h.OrderId 
-        LEFT JOIN TableMaster tm ON h.Tableno = tm.TableNumber
+        LEFT JOIN TableMaster tm ON RTRIM(LTRIM(h.Tableno)) = RTRIM(LTRIM(tm.TableNumber))
         WHERE d.OrderDetailId = @id
       `);
 
@@ -2161,7 +2161,7 @@ router.get("/active-kitchen", async (req, res) => {
         SELECT *, ROW_NUMBER() OVER(PARTITION BY KitchenTypeValue ORDER BY PrinterId) as rn
         FROM PrintMaster WHERE IsActive = 1 AND IsEnabled = 1 AND PrinterType = 2
       ) pm ON CAST(ckt.KitchenTypeCode AS VARCHAR(50)) = CAST(pm.KitchenTypeValue AS VARCHAR(50)) AND pm.rn = 1
-      LEFT JOIN TableMaster tm ON h.Tableno = tm.TableNumber
+      LEFT JOIN TableMaster tm ON RTRIM(LTRIM(h.Tableno)) = RTRIM(LTRIM(tm.TableNumber))
       WHERE (h.isOrderClosed = 0 OR h.isOrderClosed IS NULL)
       -- 🚀 Include only active items: SENT (2), READY (3), SERVED (4), HOLD (5)
       -- VOIDED items (StatusCode=0) are excluded — they should never appear on KDS or printer
