@@ -58,7 +58,8 @@ function formatKOTThermalText(data, type = 'NEW') {
     });
 
     for (const [kName, groupItems] of Object.entries(groups)) {
-      text += `[C]<font size="big"><B>${kName}</B></font>\n`;
+      // Section header: big bold, centered
+      text += `[C]<font size="big"><B>--- ${kName} ---</B></font>\n`;
       text += DIV;
       groupItems.forEach((item, idx) => {
         text += _formatItem(item);
@@ -132,43 +133,44 @@ function _wrapText(str, maxChars) {
  * Width reference (80mm paper):
  *   Normal font : 48 chars/line
  *   Big font    : 24 chars/line
- *   Item prefix : "[qty] " = 5 chars  → 19 chars for name (big font)
- *   Mod prefix  : "  + "  = 4 chars  → 44 chars for mod  (normal font)
+ *   Strategy    : QTY in big bold, item name in normal bold (fits more text)
+ *                 Modifiers in normal font with + / - prefix
  */
 function _formatItem(item) {
   let text = '';
   const qtyNum   = item.quantity || item.qty || 1;
   const itemName = item.name     || item.DishName || '';
 
-  // ── Item name: big font, bold, wrapped at 19 chars ──
-  const DISH_WRAP = 19;
-  const BIG_MOD_WRAP = 20;   // big-font chars available for modifiers (24 - 4 chars margin/prefix)
+  // ── Item name: qty is big+bold, name is normal bold (48 chars wide, minus "[n] " = 44) ──
+  const DISH_WRAP = 40;   // normal font: 48 chars wide, minus "[n] " prefix
+  const MOD_WRAP  = 44;   // normal font: 48 chars wide, minus "  + " prefix
 
   _wrapText(itemName.replace(/\n/g, ' '), DISH_WRAP).forEach((chunk, idx) => {
     if (idx === 0) {
-      text += `[L]<font size="big"><B>[${qtyNum}] ${chunk}</B></font>\n`;
+      // First line: qty in big bold + name in normal bold on same logical line
+      text += `[L]<font size="big"><B>[${qtyNum}]</B></font> <B>${chunk}</B>\n`;
     } else {
-      text += `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
+      text += `[L]     <B>${chunk}</B>\n`;
     }
   });
 
   // ── Song name ──────────────────────────────────────────────────────────────
   const songName = item.songName || item.SongName || '';
-  if (songName) text += `[L]<font size="big"><B>  ♪ ${songName}</B></font>\n`;
+  if (songName) text += `[L]  <B>♪ ${songName}</B>\n`;
 
   // ── Takeaway flag ──────────────────────────────────────────────────────────
   const isTakeaway = !!(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
   if (isTakeaway) text += `[L]<font size="big"><B>  >> TAKEAWAY <<</B></font>\n`;
 
-  // ── Modifiers (big font, bold) — wrap at 20 chars ────────────────────
+  // ── Modifiers (normal font, bold) — wrap at 44 chars ─────────────────────────
   if (item.modifiers && item.modifiers.length > 0) {
     item.modifiers.forEach(m => {
       const modName = m.ModifierName || m.modifierName || m.name || m.ModifierNameEn || '';
       if (modName) {
-        _wrapText(modName, BIG_MOD_WRAP).forEach((chunk, idx) => {
+        _wrapText(modName, MOD_WRAP).forEach((chunk, idx) => {
           text += idx === 0
-            ? `[L]<font size="big"><B>  + ${chunk}</B></font>\n`
-            : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
+            ? `[L]  <B>+ ${chunk}</B>\n`
+            : `[L]    <B>${chunk}</B>\n`;
         });
       }
     });
@@ -201,10 +203,10 @@ function _formatItem(item) {
         choices.forEach(opt => {
           const optName = opt.name || opt.DishName || opt.itemName || '';
           if (optName) {
-            _wrapText(optName, BIG_MOD_WRAP).forEach((chunk, idx) => {
+            _wrapText(optName, MOD_WRAP).forEach((chunk, idx) => {
               text += idx === 0
-                ? `[L]<font size="big"><B>  - ${chunk}</B></font>\n`
-                : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
+                ? `[L]  <B>- ${chunk}</B>\n`
+                : `[L]    <B>${chunk}</B>\n`;
             });
           }
         });
@@ -215,10 +217,10 @@ function _formatItem(item) {
   // ── Remarks / Note ─────────────────────────────────────────────────────────
   const noteText = item.note || item.notes || item.Remarks || item.remarks;
   if (noteText) {
-    _wrapText(noteText, BIG_MOD_WRAP).forEach((chunk, idx) => {
+    _wrapText(noteText, MOD_WRAP).forEach((chunk, idx) => {
       text += idx === 0 
-        ? `[L]<font size="big"><B>  * ${chunk}</B></font>\n` 
-        : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
+        ? `[L]  <B>* ${chunk}</B>\n` 
+        : `[L]    <B>${chunk}</B>\n`;
     });
   }
 
