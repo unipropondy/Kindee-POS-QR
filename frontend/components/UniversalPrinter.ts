@@ -763,7 +763,7 @@ class UniversalPrinter {
                 ip: targetIp,
                 port: 9100,
                 payload: text,
-                mmFeedPaper: 60,
+                mmFeedPaper: 25,
               });
               const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error("WiFi Timeout")), 1500),
@@ -774,7 +774,7 @@ class UniversalPrinter {
               const printPromise = ThermalPrinter.printBluetooth({
                 macAddress: targetIp,
                 payload: text,
-                mmFeedPaper: 60,
+                mmFeedPaper: 25,
               });
               const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error("BT Timeout")), 3000),
@@ -1169,8 +1169,8 @@ class UniversalPrinter {
     const DIV = "[L]------------------------------------------------\n";
 
     // Item wrapping constants (ESC/POS width alignments)
-    const BIG_NAME = 19;   // big-font chars available after "[qty] "
-    const MOD_WRAP = 38;   // medium-font chars available for modifiers
+    const DISH_WRAP = 19;
+    const BIG_MOD_WRAP = 20;   // big-font chars available for modifiers (24 - 4 chars margin/prefix)
 
     // ── Helper: wrap text ─────────────────────────────────────────────
     const wrapText = (str: string, maxChars: number): string[] => {
@@ -1198,33 +1198,33 @@ class UniversalPrinter {
       const qtyNum   = item.quantity || item.qty || 1;
       const itemName = item.name || item.DishName || "";
 
-      // Item name: big + bold, wrap only when needed
-      wrapText(itemName.replace(/\n/g, " "), BIG_NAME).forEach((chunk: string, idx: number) => {
+      // Item name: big + bold, wrapped at 19 chars
+      wrapText(itemName.replace(/\n/g, " "), DISH_WRAP).forEach((chunk: string, idx: number) => {
         if (idx === 0) t += `[L]<font size="big"><B>[${qtyNum}] ${chunk}</B></font>\n`;
         else           t += `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
       });
 
       // Song name
       const songName = item.songName || item.SongName || "";
-      if (songName) t += `[L]        <B>♪ ${songName}</B>\n`;
+      if (songName) t += `[L]<font size="big"><B>  ♪ ${songName}</B></font>\n`;
 
       // Takeaway flag
       const isTw = !!(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
-      if (isTw) t += `[L]        <B>>> TAKEAWAY <<</B>\n`;
+      if (isTw) t += `[L]<font size="big"><B>  >> TAKEAWAY <<</B></font>\n`;
 
-      // Modifiers: normal font (not big), wraps at 44 chars
+      // Modifiers: big font, wraps at 20 chars
       if (item.modifiers && item.modifiers.length > 0) {
         item.modifiers.forEach((m: any) => {
           const modName = m.ModifierName || m.modifierName || m.name || m.ModifierNameEn || "";
           if (modName) {
-            wrapText(modName, MOD_WRAP).forEach((chunk: string, idx: number) => {
-              t += idx === 0 ? `[L]        <B>+ ${chunk}</B>\n` : `[L]          <B>${chunk}</B>\n`;
+            wrapText(modName, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
+              t += idx === 0 ? `[L]<font size="big"><B>  + ${chunk}</B></font>\n` : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
             });
           }
         });
       }
 
-      // Combo selections: normal font, wrap at 44 chars
+      // Combo selections: big font, wrap at 20 chars
       let comboSels = item.comboSelections;
       if (!comboSels || (Array.isArray(comboSels) && comboSels.length === 0)) {
         const rawCombo = item.ComboDetailsJSON || item.comboDetailsJSON || item.ComboDetails || item.comboDetails;
@@ -1251,8 +1251,8 @@ class UniversalPrinter {
             choices.forEach((opt: any) => {
               const optName = opt.name || opt.DishName || opt.itemName || "";
               if (optName) {
-                wrapText(optName, MOD_WRAP).forEach((chunk: string, idx: number) => {
-                  t += idx === 0 ? `[L]        <B>- ${chunk}</B>\n` : `[L]          <B>${chunk}</B>\n`;
+                wrapText(optName, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
+                  t += idx === 0 ? `[L]<font size="big"><B>  - ${chunk}</B></font>\n` : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
                 });
               }
             });
@@ -1260,11 +1260,11 @@ class UniversalPrinter {
         });
       }
 
-      // Note / Remarks: normal font, wrap at 44 chars
+      // Note / Remarks: big font, wrap at 20 chars
       const noteText = item.note || item.notes || item.Remarks || item.remarks;
       if (noteText) {
-        wrapText(noteText, MOD_WRAP).forEach((chunk: string, idx: number) => {
-          t += idx === 0 ? `[L]        <B>* ${chunk}</B>\n` : `[L]          <B>${chunk}</B>\n`;
+        wrapText(noteText, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
+          t += idx === 0 ? `[L]<font size="big"><B>  * ${chunk}</B></font>\n` : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
         });
       }
 
@@ -1297,7 +1297,7 @@ class UniversalPrinter {
       });
 
       for (const [kName, groupItems] of Object.entries(groups)) {
-        text += `[C]<B>${kName}</B>\n`;
+        text += `[C]<font size="big"><B>${kName}</B></font>\n`;
         text += DIV;
         groupItems.forEach((item: any, idx: number) => {
           text += formatItem(item);
@@ -1644,13 +1644,13 @@ class UniversalPrinter {
           ip: targetAddress,
           port: 9100,
           payload: text,
-          mmFeedPaper: 60,
+          mmFeedPaper: 25,
         });
       } else {
         await ThermalPrinter.printBluetooth({
           macAddress: targetAddress,
           payload: text,
-          mmFeedPaper: 60,
+          mmFeedPaper: 25,
         });
       }
       return true;
@@ -2334,7 +2334,7 @@ class UniversalPrinter {
               ip: PrinterIp,
               port: PrinterPort || 9100,
               payload: Content,
-              mmFeedPaper: 60,
+              mmFeedPaper: 25,
             });
             printSuccess = true;
           } else {
@@ -2342,7 +2342,7 @@ class UniversalPrinter {
             await ThermalPrinter.printBluetooth({
               macAddress: PrinterIp,
               payload: Content,
-              mmFeedPaper: 60,
+              mmFeedPaper: 25,
             });
             printSuccess = true;
           }
@@ -2412,13 +2412,13 @@ class UniversalPrinter {
           ip: targetIp.trim(),
           port: 9100,
           payload,
-          mmFeedPaper: 60,
+          mmFeedPaper: 25,
         });
       } else {
         await ThermalPrinter.printBluetooth({
           macAddress: targetIp.trim(),
           payload,
-          mmFeedPaper: 60,
+          mmFeedPaper: 25,
         });
       }
       return true;
