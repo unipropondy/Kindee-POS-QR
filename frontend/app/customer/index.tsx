@@ -66,7 +66,7 @@ export default function CustomerWelcomeScreen() {
 
   // Sign Up
   const [regUsername, setRegUsername] = useState("");
-  const [regCountryCode, setRegCountryCode] = useState("+65");
+  const [regCountryCode, setRegCountryCode] = useState("");
   const [regPhone, setRegPhone] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
@@ -521,15 +521,12 @@ export default function CustomerWelcomeScreen() {
                   <View style={cardFieldStyles.iconBadge}>
                     <Ionicons name="call-outline" size={18} color={C.orangePrimary} />
                   </View>
-                  <TouchableOpacity onPress={selectCountryCode} style={cardFieldStyles.countryPicker}>
-                    <Text style={cardFieldStyles.countryText}>{regCountryCode} ▾</Text>
-                  </TouchableOpacity>
                   <TextInput
                     style={cardFieldStyles.input}
                     placeholder="Enter phone number"
                     placeholderTextColor={C.textPlaceholder}
                     value={regPhone}
-                    onChangeText={(t) => setRegPhone(t.replace(/[^0-9]/g, ''))}
+                    onChangeText={(t) => setRegPhone(t.replace(/[^0-9+]/g, ''))}
                     keyboardType="phone-pad"
                   />
                 </View>
@@ -622,44 +619,6 @@ export default function CustomerWelcomeScreen() {
         </Animated.View>
       </ScrollView>
 
-      {/* Country Code Selection Modal */}
-      {showPicker && (
-        <Modal transparent visible={showPicker} animationType="fade">
-          <TouchableOpacity 
-            style={styles.modalOverlay} 
-            activeOpacity={1}
-            onPress={() => setShowPicker(false)}
-          >
-            <View style={styles.pickerModalContent}>
-              <Text style={styles.pickerModalTitle}>Select Country Code</Text>
-              {[
-                { label: "Singapore (+65)", value: "+65" },
-                { label: "Malaysia (+60)", value: "+60" },
-                { label: "India (+91)", value: "+91" },
-                { label: "Indonesia (+62)", value: "+62" },
-                { label: "USA (+1)", value: "+1" }
-              ].map((item) => (
-                <TouchableOpacity 
-                  key={item.value} 
-                  style={styles.pickerItem}
-                  onPress={() => {
-                    setRegCountryCode(item.value);
-                    setShowPicker(false);
-                  }}
-                >
-                  <Text style={styles.pickerItemText}>{item.label}</Text>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity 
-                style={styles.pickerCancelBtn}
-                onPress={() => setShowPicker(false)}
-              >
-                <Text style={styles.pickerCancelText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </Modal>
-      )}
 
       {/* Popup Alert Modal */}
       {popupConfig && (
