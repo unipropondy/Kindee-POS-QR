@@ -1926,7 +1926,7 @@ class UniversalPrinter {
     const gstAmountRaw = hasGST ? taxableAmount * (gstRate / 100) : 0;
     const gstAmount = Math.round(gstAmountRaw * 100) / 100;
     
-    if (finalTotal === 0) {
+    if (finalTotal === 0 || isCheckout) {
       finalTotal = taxableAmount + gstAmount;
     }
     
@@ -1954,20 +1954,22 @@ class UniversalPrinter {
       text += "[L]------------------------------------------------\n";
     }
 
-    // Payment Details
-    if (saleData.payments && Array.isArray(saleData.payments) && saleData.payments.length > 0) {
-      text += "[L]Payment Details:\n";
-      saleData.payments.forEach((p: any) => {
-        const modeLabel = `  ${String(p.payMode || p.payModeName || p.Remarks || "Payment")}`;
-        const amountVal = `${symbol}${parseFloat(p.amount).toFixed(2)}`;
-        text += this.formatTwoCols48(modeLabel, amountVal);
-      });
-      text += "[L]------------------------------------------------\n";
-    } else {
-      const methodLabel = `  ${String(saleData.paymentMethod || "Payment")}`;
-      const amountVal = `${symbol}${parseFloat(finalTotal).toFixed(2)}`;
-      text += this.formatTwoCols48(methodLabel, amountVal);
-      text += "[L]------------------------------------------------\n";
+    // Payment Details (only print on settled receipts, hide on checkout bills)
+    if (!isCheckout) {
+      if (saleData.payments && Array.isArray(saleData.payments) && saleData.payments.length > 0) {
+        text += "[L]Payment Details:\n";
+        saleData.payments.forEach((p: any) => {
+          const modeLabel = `  ${String(p.payMode || p.payModeName || p.Remarks || "Payment")}`;
+          const amountVal = `${symbol}${parseFloat(p.amount).toFixed(2)}`;
+          text += this.formatTwoCols48(modeLabel, amountVal);
+        });
+        text += "[L]------------------------------------------------\n";
+      } else {
+        const methodLabel = `  ${String(saleData.paymentMethod || "Payment")}`;
+        const amountVal = `${symbol}${parseFloat(finalTotal).toFixed(2)}`;
+        text += this.formatTwoCols48(methodLabel, amountVal);
+        text += "[L]------------------------------------------------\n";
+      }
     }
 
     text += `[R]<font size=\'big\'><B>TOTAL: ${symbol}${finalTotal.toFixed(2)}</B></font>\n`;
