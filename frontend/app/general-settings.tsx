@@ -105,6 +105,7 @@ export default function GeneralSettingsScreen() {
   const [enableQROrderAutoPrint, setEnableQROrderAutoPrint] = useState(settings.enableQROrderAutoPrint !== undefined ? settings.enableQROrderAutoPrint : true);
   const [enableComboPrint, setEnableComboPrint] = useState(settings.enableComboPrint !== undefined ? settings.enableComboPrint : false);
   const [enableRequestService, setEnableRequestService] = useState(settings.enableRequestService !== undefined ? settings.enableRequestService : true);
+  const [enableCookingInstructions, setEnableCookingInstructions] = useState(settings.enableCookingInstructions !== undefined ? settings.enableCookingInstructions : true);
 
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordValue, setPasswordValue] = useState("");
@@ -133,6 +134,7 @@ export default function GeneralSettingsScreen() {
     setEnableQROrderAutoPrint(settings.enableQROrderAutoPrint !== undefined ? settings.enableQROrderAutoPrint : true);
     setEnableComboPrint(settings.enableComboPrint !== undefined ? settings.enableComboPrint : false);
     setEnableRequestService(settings.enableRequestService !== undefined ? settings.enableRequestService : true);
+    setEnableCookingInstructions(settings.enableCookingInstructions !== undefined ? settings.enableCookingInstructions : true);
 
     let initialCheckoutFlow = settings.enableCheckoutFlow;
     let initialDirectProcess = settings.enableDirectProcessToPay;
@@ -222,6 +224,7 @@ export default function GeneralSettingsScreen() {
       enableQROrderAutoPrint,
       enableComboPrint,
       enableRequestService,
+      enableCookingInstructions,
     });
     setSaving(false);
 
@@ -387,6 +390,13 @@ export default function GeneralSettingsScreen() {
           icon: "notifications-outline",
           value: enableRequestService,
           onToggle: setEnableRequestService,
+        },
+        {
+          title: "Cooking Instructions",
+          desc: "Show the Cooking Instructions input section on the customer QR order cart page.",
+          icon: "pencil-outline",
+          value: enableCookingInstructions,
+          onToggle: setEnableCookingInstructions,
         },
       ]
     }

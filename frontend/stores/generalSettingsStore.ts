@@ -22,6 +22,7 @@ export interface GeneralSettings {
   enableQROrderAutoPrint: boolean;
   enableComboPrint: boolean;
   enableRequestService: boolean;
+  enableCookingInstructions: boolean;
 }
 
 interface GeneralSettingsState {
@@ -53,6 +54,7 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
         enableQROrderAutoPrint: true,
         enableComboPrint: false,
         enableRequestService: true,
+        enableCookingInstructions: true,
       },
       loading: false,
 
@@ -84,6 +86,7 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
                 enableQROrderAutoPrint: data.EnableQROrderAutoPrint !== undefined ? Boolean(data.EnableQROrderAutoPrint) : true,
                 enableComboPrint: data.EnableComboPrint !== undefined ? Boolean(data.EnableComboPrint) : false,
                 enableRequestService: data.EnableRequestService !== undefined ? Boolean(data.EnableRequestService) : true,
+                enableCookingInstructions: data.EnableCookingInstructions !== undefined ? Boolean(data.EnableCookingInstructions) : true,
               },
             }));
           }
@@ -128,6 +131,7 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
             enableQROrderAutoPrint: updatedSettings.enableQROrderAutoPrint,
             enableComboPrint: updatedSettings.enableComboPrint,
             enableRequestService: updatedSettings.enableRequestService,
+            enableCookingInstructions: updatedSettings.enableCookingInstructions,
           };
 
           const res = await fetch(`${API_URL}/api/settings/update`, {

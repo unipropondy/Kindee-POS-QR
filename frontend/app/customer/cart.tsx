@@ -18,6 +18,7 @@ import { Theme } from "../../constants/theme";
 import { useCartStore } from "../../stores/cartStore";
 import { useOrderContextStore } from "../../stores/orderContextStore";
 import { useCompanySettingsStore } from "../../stores/companySettingsStore";
+import { useGeneralSettingsStore } from "../../stores/generalSettingsStore";
 import { API_URL } from "../../constants/Config";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -183,6 +184,7 @@ export default function CustomerCartScreen() {
   const { carts, currentContextId, updateCartItemQty, syncCartWithDB, checkoutOrder, cancelPendingSync } = useCartStore();
   const orderContext = useOrderContextStore((state) => state.currentOrder);
   const settings = useCompanySettingsStore((state: any) => state.settings);
+  const generalSettings = useGeneralSettingsStore((state) => state.settings);
   
   // 🌟 Premium Micro-Animation refs & state
   const [isAnimating, setIsAnimating] = useState(false);
@@ -223,6 +225,7 @@ export default function CustomerCartScreen() {
         setApplyPromo(true);
       }
     }
+    useGeneralSettingsStore.getState().fetchSettings();
   }, []);
 
   // 🔄 REAL-TIME SYNC: If another person on the same table places an order while this
@@ -581,15 +584,19 @@ export default function CustomerCartScreen() {
           currentCart.length > 0 ? (
             <View style={styles.footerContainer}>
               {/* Cooking Instructions */}
-              <Text style={styles.sectionTitle}>Cooking Instructions</Text>
-              <TextInput
-                style={styles.notesInput}
-                placeholder="E.g., No onions, extra spicy, less salt..."
-                value={notes}
-                onChangeText={setNotes}
-                multiline
-                placeholderTextColor="#94A3B8"
-              />
+              {generalSettings.enableCookingInstructions !== false && (
+                <>
+                  <Text style={styles.sectionTitle}>Cooking Instructions</Text>
+                  <TextInput
+                    style={styles.notesInput}
+                    placeholder="E.g., No onions, extra spicy, less salt..."
+                    value={notes}
+                    onChangeText={setNotes}
+                    multiline
+                    placeholderTextColor="#94A3B8"
+                  />
+                </>
+              )}
 
 
 
