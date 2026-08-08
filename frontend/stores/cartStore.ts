@@ -297,7 +297,11 @@ const normalizeCartItem = (item: any, fallback: Partial<CartItem> = {}): CartIte
     PrinterIP: item.PrinterIP || fallback.PrinterIP,
     KitchenTypeCode: item.KitchenTypeCode || fallback.KitchenTypeCode,
     IsOpenItem: item.IsOpenItem !== undefined ? item.IsOpenItem : fallback.IsOpenItem,
-    isServiceCharge: item.isServiceCharge !== undefined ? (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true ? 1 : 0) : (fallback.isServiceCharge !== undefined ? (Number(fallback.isServiceCharge) === 1 || fallback.isServiceCharge === true ? 1 : 0) : 1),
+    isServiceCharge: (item.isServiceCharge !== undefined || item.IsServiceCharge !== undefined)
+      ? (Number(item.isServiceCharge ?? item.IsServiceCharge) === 1 || (item.isServiceCharge ?? item.IsServiceCharge) === true ? 1 : 0)
+      : (fallback.isServiceCharge !== undefined || fallback.IsServiceCharge !== undefined)
+        ? (Number(fallback.isServiceCharge ?? fallback.IsServiceCharge) === 1 || (fallback.isServiceCharge ?? fallback.IsServiceCharge) === true ? 1 : 0)
+        : 1,
     isCombo: getNormalizedBoolean(item.isCombo, item.IsCombo, item.ComboDetailsJSON, fallback.isCombo),
     comboSelections: incomingComboSelections || _comboGroups || fallback.comboSelections || undefined,
     IsDiscountAllowed: item.IsDiscountAllowed !== undefined ? item.IsDiscountAllowed : (fallback.IsDiscountAllowed !== undefined ? fallback.IsDiscountAllowed : 1),

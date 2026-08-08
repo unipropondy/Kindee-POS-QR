@@ -337,7 +337,7 @@ export default function CustomerItemDetailsScreen() {
         Price: Number(m.Price || 0),
       })),
       isTakeaway: false,
-      isServiceCharge: dish.isServiceCharge !== undefined ? dish.isServiceCharge : 1,
+      isServiceCharge: dish.isServiceCharge !== undefined ? dish.isServiceCharge : (dish.IsServiceCharge !== undefined ? dish.IsServiceCharge : 1),
     };
 
     const lineItemId = await addToCartGlobal(cartItemData as any);
@@ -364,7 +364,7 @@ export default function CustomerItemDetailsScreen() {
         Price: Number(m.Price || 0),
       })),
       isTakeaway: false,
-      isServiceCharge: dish.isServiceCharge !== undefined ? dish.isServiceCharge : 1,
+      isServiceCharge: dish.isServiceCharge !== undefined ? dish.isServiceCharge : (dish.IsServiceCharge !== undefined ? dish.IsServiceCharge : 1),
     };
 
     const lineItemId = await addToCartGlobal(cartItemData as any);
