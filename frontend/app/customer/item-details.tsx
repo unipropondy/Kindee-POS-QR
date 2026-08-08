@@ -404,7 +404,7 @@ export default function CustomerItemDetailsScreen() {
     groupedModifiers[groupName].push(mod);
   });
 
-  const showSkipButton = !!(comboConfig && comboConfig.groups && comboConfig.groups.length > 0 && Number(dish?.Price || 0) > 0);
+  const showSkipButton = false;
 
   return (
     <View style={styles.container}>
