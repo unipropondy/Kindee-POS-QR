@@ -1958,13 +1958,14 @@ router.post("/remove-item", async (req, res) => {
     await transaction.begin();
     try {
       // 🚀 SMART REMOVAL: Delete if NEW, Void if SENT
-      await transaction
+      const dbResult = await transaction
         .request()
         .input("itemId", sql.UniqueIdentifier, itemGuid)
         .input("userId", sql.UniqueIdentifier, userId)
         .input("reason", sql.NVarChar(255), reason || "").query(`
           DECLARE @CurrentStatus INT;
-          SELECT @CurrentStatus = StatusCode FROM RestaurantOrderDetailCur WHERE OrderDetailId = @itemId;
+          DECLARE @OrderId UNIQUEIDENTIFIER;
+          SELECT @CurrentStatus = StatusCode, @OrderId = OrderId FROM RestaurantOrderDetailCur WHERE OrderDetailId = @itemId;
 
           IF @CurrentStatus = 1
           BEGIN
@@ -1980,11 +1981,25 @@ router.post("/remove-item", async (req, res) => {
                 Remarks = ISNULL(Remarks, '') + ' (VOID: ' + @reason + ')'
             WHERE OrderDetailId = @itemId;
           END
+
+          SELECT @OrderId as OrderId;
         `);
       await transaction.commit();
 
+      const orderId = dbResult.recordset[0]?.OrderId;
+
       // 🚀 Refresh total immediately
       syncTableStatus(req, tableId).catch(() => { });
+
+      // Broadcast status updates immediately via socket to keep all screens in sync instantly
+      if (orderId) {
+        req.app.get("io")?.emit("item_status_updated", {
+          orderId: orderId,
+          lineItemId: itemId,
+          status: "VOIDED",
+          tableId: tableId
+        });
+      }
 
       req.app.get("io")?.emit("cart_updated", {
         tableId: String(tableId || "").toLowerCase(),
