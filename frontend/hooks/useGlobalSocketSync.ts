@@ -38,6 +38,17 @@ export function useGlobalSocketSync() {
       }
       // Re-fetch all active kitchen orders on reconnect to recover any missed socket events
       useActiveOrdersStore.getState().fetchActiveKitchenOrders();
+      
+      // Immediately check for any print jobs on reconnect
+      const isCustomer =
+        Platform.OS === "web" &&
+        typeof window !== "undefined" &&
+        window?.location &&
+        (window.location.pathname?.includes("/customer") ||
+          window.location.href?.includes("/customer"));
+      if (!isCustomer) {
+        UniversalPrinter.processPendingPrintJobs();
+      }
     };
 
     // 🔄 BACKGROUND SAFETY SYNC: Poll every 60 seconds as a fallback.
@@ -64,6 +75,19 @@ export function useGlobalSocketSync() {
         }
       }
     }, 4 * 60 * 1000); // every 4 minutes
+ 
+    // 🔄 PRINT QUEUE SAFETY SYNC: Poll every 20 seconds as a fallback for pending print jobs.
+    const printQueueSyncInterval = setInterval(() => {
+      const isCustomer =
+        Platform.OS === "web" &&
+        typeof window !== "undefined" &&
+        window?.location &&
+        (window.location.pathname?.includes("/customer") ||
+          window.location.href?.includes("/customer"));
+      if (!isCustomer) {
+        UniversalPrinter.processPendingPrintJobs();
+      }
+    }, 20 * 1000);
 
     const handleConnectError = (error: any) => {
       if (__DEV__) {
@@ -357,6 +381,7 @@ export function useGlobalSocketSync() {
     return () => {
       clearInterval(keepAliveInterval);
       clearInterval(backgroundSyncInterval);
+      clearInterval(printQueueSyncInterval);
       socket.off("connect", handleConnect);
       socket.off("connect_error", handleConnectError);
       socket.off("new_order", handleNewOrder);

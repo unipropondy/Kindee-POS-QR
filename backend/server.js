@@ -540,6 +540,28 @@ httpServer.listen(PORT, async () => {
     }
   }, 3 * 60 * 1000); // Every 3 minutes
   console.log("🍳 [KitchenSync] Background auto-sync started (every 3 minutes).");
+
+  // 🔄 PRINT QUEUE CLEANUP: Reset stuck 'PROCESSING' jobs to 'PENDING' every 60 seconds
+  setInterval(async () => {
+    try {
+      const pool = await poolPromise;
+      if (pool && pool.connected) {
+        const result = await pool.request().query(`
+          UPDATE PrintJobQueue
+          SET Status = 'PENDING', ProcessedOn = NULL, Attempts = 0
+          WHERE Status = 'PROCESSING' AND DATEDIFF(minute, ProcessedOn, GETDATE()) >= 3
+        `);
+        if (result.rowsAffected[0] > 0) {
+          console.log(`🧹 [PrintQueue Cleanup] Reset ${result.rowsAffected[0]} stuck print jobs back to PENDING.`);
+          // Notify the print bridge client that jobs are available to print
+          io.emit("print_jobs_available", { storeId: "STORE_001" });
+        }
+      }
+    } catch (err) {
+      console.error("❌ [PrintQueue Cleanup] Error resetting stuck jobs:", err.message);
+    }
+  }, 60 * 1000); // Every 60 seconds
+  console.log("🧹 [PrintQueue Cleanup] Background watchdog started (every 60 seconds).");
 });
 
 // Register global exception handlers for transaction cleanup

@@ -2332,20 +2332,28 @@ class UniversalPrinter {
 
           if (isIp) {
             console.log(`🌐 [UniversalPrinter] WiFi print to: ${PrinterIp}`);
-            await ThermalPrinter.printTcp({
+            const printPromise = ThermalPrinter.printTcp({
               ip: PrinterIp,
               port: PrinterPort || 9100,
               payload: Content,
               mmFeedPaper: 25,
             });
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("WiFi Timeout")), 5000)
+            );
+            await Promise.race([printPromise, timeoutPromise]);
             printSuccess = true;
           } else {
             console.log(`🔵 [UniversalPrinter] Bluetooth print to: ${PrinterIp}`);
-            await ThermalPrinter.printBluetooth({
+            const printPromise = ThermalPrinter.printBluetooth({
               macAddress: PrinterIp,
               payload: Content,
               mmFeedPaper: 25,
             });
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Bluetooth Timeout")), 5000)
+            );
+            await Promise.race([printPromise, timeoutPromise]);
             printSuccess = true;
           }
 

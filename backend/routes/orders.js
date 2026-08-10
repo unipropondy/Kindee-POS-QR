@@ -1946,7 +1946,8 @@ router.post("/checkout", async (req, res) => {
 router.post("/remove-item", async (req, res) => {
   try {
     const { tableId, itemId, qtyToVoid, reason, version } = req.body;
-    const userId = req.body.userId || DEFAULT_GUID;
+    const userId = toGuidOrNull(req.body.userId) || DEFAULT_GUID;
+    const itemGuid = toGuidOrNull(itemId);
     const pool = await poolPromise;
     const now = Date.now();
     console.log(
@@ -1959,8 +1960,8 @@ router.post("/remove-item", async (req, res) => {
       // 🚀 SMART REMOVAL: Delete if NEW, Void if SENT
       await transaction
         .request()
-        .input("itemId", sql.VarChar(50), itemId)
-        .input("userId", sql.VarChar(50), userId)
+        .input("itemId", sql.UniqueIdentifier, itemGuid)
+        .input("userId", sql.UniqueIdentifier, userId)
         .input("reason", sql.NVarChar(255), reason || "").query(`
           DECLARE @CurrentStatus INT;
           SELECT @CurrentStatus = StatusCode FROM RestaurantOrderDetailCur WHERE OrderDetailId = @itemId;
