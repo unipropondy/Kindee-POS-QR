@@ -1,16 +1,18 @@
 /**
- * Timezone utilities to enforce local device/UI timezone in the frontend.
+ * Timezone utilities to enforce SGT (Singapore Time, UTC+8) in the frontend.
  */
 
-// Helper to return the Date as-is for local device timezone formatting
-function toSgtDate(date: Date): Date {
-  return date;
-}
-
 export function getSingaporeDateString(date: Date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Singapore',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = formatter.formatToParts(date);
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  const year = parts.find(p => p.type === 'year')?.value;
   return `${year}-${month}-${day}`;
 }
 
@@ -22,6 +24,7 @@ export function formatToSingaporeDate(
   const date = parseDatabaseDate(dateInput);
   if (isNaN(date.getTime())) return "";
   return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Singapore',
     ...options
   }).format(date);
 }
@@ -34,6 +37,7 @@ export function formatToSingaporeTime(
   const date = parseDatabaseDate(dateInput);
   if (isNaN(date.getTime())) return "";
   return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Singapore',
     ...options
   }).format(date);
 }
@@ -52,9 +56,20 @@ export function getSingaporeDate(): Date {
 }
 
 export function getSingaporeTimeTodayRange(): { from: Date; to: Date } {
-  const now = getSingaporeDate();
-  const from = new Date(now);
-  from.setHours(0, 0, 0, 0);
+  const now = new Date();
+  
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Singapore',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = formatter.formatToParts(now);
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  const year = parts.find(p => p.type === 'year')?.value;
+
+  const from = new Date(`${year}-${month}-${day}T00:00:00+08:00`);
   const to = new Date(now);
   return { from, to };
 }
@@ -83,19 +98,34 @@ export function parseDatabaseDate(dateInput: Date | string | number): Date {
     if (ampm.toUpperCase() === 'PM' && hour < 12) hour += 12;
     if (ampm.toUpperCase() === 'AM' && hour === 12) hour = 0;
 
-    return new Date(year, month, day, hour, minute, 0);
+    const isoStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+08:00`;
+    return new Date(isoStr);
   }
 
-  // Replace space with T to make it standard and parseable in React Native / Hermes
-  if (!str.includes('T') && str.includes(' ') && !/^[a-zA-Z]{3}/.test(str)) {
-    str = str.replace(' ', 'T');
+  // Strip Z and any existing timezone offset to get local time representation
+  let cleanStr = str.replace(/Z$/i, '');
+  cleanStr = cleanStr.replace(/[+-]\d{2}:\d{2}$/, '');
+
+  // Replace space with T to make it standard
+  if (!cleanStr.includes('T') && cleanStr.includes(' ') && !/^[a-zA-Z]{3}/.test(cleanStr)) {
+    cleanStr = cleanStr.replace(' ', 'T');
   }
 
-  const parsed = new Date(str);
+  // If it's a valid date starting with YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(cleanStr)) {
+    if (!cleanStr.includes('T')) {
+      cleanStr += 'T00:00:00';
+    }
+    // Append Singapore Timezone (SGT, UTC+8)
+    cleanStr += '+08:00';
+  }
+
+  const parsed = new Date(cleanStr);
   if (isNaN(parsed.getTime())) {
     return new Date(dateInput);
   }
   return parsed;
 }
+
 
 

@@ -379,6 +379,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 14,
     fontSize: 16,
+    color: Theme.textPrimary || "#000",
   },
   helper: { fontSize: 12, color: "#718096", marginTop: 5 },
   row: { flexDirection: "row", gap: 10, marginTop: 10 },

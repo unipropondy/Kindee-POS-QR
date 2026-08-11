@@ -230,6 +230,7 @@ export function useGlobalSocketSync() {
         markItemServed(payload.orderId, cleanLineItemId, true);
       } else if (payload.status === "VOIDED") {
         voidOrderItem(payload.orderId, cleanLineItemId);
+        useCartStore.getState().voidCartItem(cleanLineItemId);
       }
 
       const currentOrder = useOrderContextStore.getState().currentOrder;
@@ -274,6 +275,7 @@ export function useGlobalSocketSync() {
         closeActiveOrder(payload.orderId);
       } else if (payload.action === "VOID" && payload.lineItemId) {
         voidOrderItem(payload.orderId, payload.lineItemId);
+        useCartStore.getState().voidCartItem(payload.lineItemId);
       }
     };
 

@@ -669,13 +669,13 @@ class SunmiPrinterService {
 
       const is80mm = SunmiPrinterManager.getPaperSize() === "80mm";
       const fontSizes = {
-        title: is80mm ? 28 : 36,
-        timestamp: is80mm ? 20 : 24,
-        table: is80mm ? 38 : 48,
-        item: is80mm ? 28 : 36,
-        modifier: is80mm ? 28 : 36,
-        note: is80mm ? 22 : 28,
-        reset: is80mm ? 20 : 24,
+        title: is80mm ? 36 : 44,
+        timestamp: is80mm ? 26 : 30,
+        table: is80mm ? 48 : 60,
+        item: is80mm ? 36 : 44,
+        modifier: is80mm ? 34 : 42,
+        note: is80mm ? 28 : 34,
+        reset: is80mm ? 24 : 28,
       };
 
       const title = type === "KDS_PRINT" ? "KDS PRINT" : type === "REPRINT" ? "REPRINT" : type === "ADDITIONAL" ? "ADDITIONAL" : "NEW ORDER";

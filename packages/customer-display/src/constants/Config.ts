@@ -30,7 +30,6 @@ export let API_URL: string = isDev
   : (
     (typeof process !== 'undefined' ? process.env?.EXPO_PUBLIC_API_URL : undefined) ??
     'https://kindee-2026-production.up.railway.app'
-
   );
 
 export const setApiUrl = (url: string) => {

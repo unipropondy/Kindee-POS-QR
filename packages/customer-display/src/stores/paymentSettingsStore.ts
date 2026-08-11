@@ -64,10 +64,24 @@ export const usePaymentSettingsStore = create<PaymentSettingsState>()(
       paymentMethods: [],
       hasLoadedMethods: false,
 
-      fetchSettings: async () => {
+       fetchSettings: async () => {
         set({ loading: true });
         try {
-          const response = await fetch(`${API_URL}/api/settings`);
+          let token: string | null = null;
+          try {
+            const storage = getStorage();
+            const authData = await storage.getItem('auth-storage');
+            if (authData) {
+              const parsed = JSON.parse(authData);
+              token = parsed.state?.token || null;
+            }
+          } catch (e) {}
+
+          const response = await fetch(`${API_URL}/api/settings`, {
+            headers: {
+              ...(token ? { Authorization: `Bearer ${token}` } : {})
+            }
+          });
           const data = await response.json();
           if (data) {
             set({
@@ -91,12 +105,26 @@ export const usePaymentSettingsStore = create<PaymentSettingsState>()(
 
       fetchPaymentMethods: async () => {
         try {
-          const res = await fetch(`${API_URL}/api/sales/payment-methods`);
+          let token: string | null = null;
+          try {
+            const storage = getStorage();
+            const authData = await storage.getItem('auth-storage');
+            if (authData) {
+              const parsed = JSON.parse(authData);
+              token = parsed.state?.token || null;
+            }
+          } catch (e) {}
+
+          const res = await fetch(`${API_URL}/api/sales/payment-methods`, {
+            headers: {
+              ...(token ? { Authorization: `Bearer ${token}` } : {})
+            }
+          });
           if (!res.ok) return;
           const data: any[] = await res.json();
           const mapped: CachedPaymentMethod[] = data.map((d) => ({
-            payMode: d.payMode || '',
-            description: d.description || d.payMode || '',
+            payMode: (d.payMode || '').trim(),
+            description: (d.description || d.payMode || '').trim(),
             position: d.Position || 0,
             active: d.active,
             commission: parseFloat(d.commission) || 0,

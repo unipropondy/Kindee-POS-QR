@@ -985,6 +985,67 @@ export default function SummaryScreen() {
     }
   };
 
+  const handlePrintSplitPartsBills = async () => {
+    if (!cart.length) return;
+    try {
+      const partAmount = Math.round((grandTotal / partCount) * 100) / 100;
+      const partSubtotal = Math.round((subtotal / partCount) * 100) / 100;
+      const partServiceCharge = Math.round((serviceChargeAmount / partCount) * 100) / 100;
+      const partTakeawayCharge = Math.round((currentTakeawayCharge / partCount) * 100) / 100;
+      const partDiscountAmount = discountAmount ? Math.round((discountAmount / partCount) * 100) / 100 : 0;
+
+      for (let i = 1; i <= partCount; i++) {
+        const saleData = {
+          items: cart.map((item: any) => {
+            const rawPrice = item.price || item.Price || 0;
+            const splitPrice = Math.round((rawPrice / partCount) * 100) / 100;
+            return {
+              ...item,
+              qty: item.qty || item.quantity || 1,
+              price: splitPrice,
+              Price: splitPrice,
+              basePrice: item.basePrice ? Math.round((item.basePrice / partCount) * 100) / 100 : undefined,
+            };
+          }),
+          total: partAmount,
+          subtotal: partSubtotal,
+          discount: discountInfo ? {
+            ...discountInfo,
+            amount: partDiscountAmount,
+          } : undefined,
+          orderId: `${displayOrderId}-Part ${i}/${partCount}`,
+          tableNo: context?.tableNo,
+          waiterName: context?.serverName,
+          date: new Date(),
+          isCheckout: true,
+          serviceCharge: partServiceCharge,
+          takeawayCharge: partTakeawayCharge,
+          mobileNo: rewardMember?.Phone || "",
+          memberRewardBalance: String(rewardMember?.RewardCredit || 0),
+        };
+
+        await UniversalPrinter.printCheckoutBill(
+          saleData,
+          user?.userId || "SYSTEM",
+          discountInfo ? {
+            ...discountInfo,
+            amount: partDiscountAmount,
+          } : undefined,
+        );
+      }
+
+      showToast({
+        type: "success",
+        message: "Split Bills Printing",
+        subtitle: `Sent ${partCount} bills to printer`,
+      });
+      setShowSplitModal(false);
+    } catch (err) {
+      console.error("Print Split Bills error:", err);
+      showToast({ type: "error", message: "Printing Failed" });
+    }
+  };
+
   // ── Reduce/Restore Service Charge Handler ──────────────────────────────────
   const handleReduceServiceCharge = async () => {
     if (!displayOrderId) {
@@ -1073,7 +1134,8 @@ export default function SummaryScreen() {
   useEffect(() => {
     const fetchDishLoyaltyRewards = async () => {
       const phone = loyaltyPhone ? `${selectedCountry.code} ${loyaltyPhone.trim()}` : "";
-      if (!phone || cart.length === 0) {
+      const activeCart = cart.filter((i: any) => i.status !== "VOIDED" && i.isVoided !== true && i.StatusCode !== 0 && i.statusCode !== 0);
+      if (!phone || activeCart.length === 0) {
         setLoyaltyDiscountItems([]);
         setLoyaltyDiscountAmount(0);
         setAppliedDishRewards([]);
@@ -1081,7 +1143,7 @@ export default function SummaryScreen() {
       }
       try {
         const token = useAuthStore.getState().token;
-        const mappedItems = cart.map((i: any) => ({
+        const mappedItems = activeCart.map((i: any) => ({
           DishId: i.DishId || i.dishId || i.id,
           Qty: i.qty,
           Price: i.price,
@@ -1098,12 +1160,16 @@ export default function SummaryScreen() {
         });
         const data = await res.json();
         if (data.success) {
-          const processed = (data.items || []).map((i: any) => ({
-            ...i,
-            qty: i.Qty !== undefined ? i.Qty : i.qty,
-            price: i.Price !== undefined ? i.Price : i.price,
-            name: i.name || cart.find((raw: any) => String(raw.id || raw.DishId || raw.dishId).toLowerCase() === String(i.DishId || i.id).toLowerCase())?.name || "Dish"
-          }));
+          const processed = (data.items || []).map((i: any) => {
+            const originalCartItem = activeCart.find((raw: any) => String(raw.id || raw.DishId || raw.dishId).toLowerCase() === String(i.DishId || i.id).toLowerCase()) || {};
+            return {
+              ...originalCartItem,
+              ...i,
+              qty: i.Qty !== undefined ? i.Qty : i.qty,
+              price: i.Price !== undefined ? i.Price : i.price,
+              name: i.name || originalCartItem.name || "Dish"
+            };
+          });
           setLoyaltyDiscountItems(processed);
           setLoyaltyDiscountAmount(data.totalDiscount || 0);
           setAppliedDishRewards(data.appliedRewards || []);
@@ -1124,7 +1190,8 @@ export default function SummaryScreen() {
   }, [loyaltyPhone, selectedCountry, cart]);
 
   const finalItems = useMemo(() => {
-    return loyaltyDiscountItems.length > 0 ? loyaltyDiscountItems : cart;
+    const rawItems = loyaltyDiscountItems.length > 0 ? loyaltyDiscountItems : cart;
+    return rawItems.filter((i: any) => i.status !== "VOIDED" && i.isVoided !== true && i.StatusCode !== 0 && i.statusCode !== 0);
   }, [loyaltyDiscountItems, cart]);
 
 
@@ -2795,11 +2862,16 @@ export default function SummaryScreen() {
           const verifyData = await verifyRes.json();
 
           if (verifyData.success) {
-            if (activeOrder && itemToVoid) {
+            const hasDbOrder = displayOrderId && displayOrderId !== "NEW" && displayOrderId !== "PENDING" && !displayOrderId.startsWith("TEMP-");
+            if (hasDbOrder && itemToVoid) {
               try {
-                await fetch(`${API_URL}/api/orders/remove-item`, {
+                const token = useAuthStore.getState().token;
+                const res = await fetch(`${API_URL}/api/orders/remove-item`, {
                   method: "POST",
-                  headers: { "Content-Type": "application/json" },
+                  headers: { 
+                    "Content-Type": "application/json",
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                  },
                   body: JSON.stringify({
                     tableId: context.tableId,
                     itemId: itemToVoid.lineItemId,
@@ -2807,7 +2879,11 @@ export default function SummaryScreen() {
                     userId: user?.userId,
                   }),
                 });
-                voidOrderItem(activeOrder.orderId, itemToVoid.lineItemId);
+                if (!res.ok) {
+                  const errorData = await res.json().catch(() => ({}));
+                  throw new Error(errorData.error || `Server returned ${res.status}`);
+                }
+                voidOrderItem(displayOrderId, itemToVoid.lineItemId);
                 useCartStore.getState().voidCartItem(itemToVoid.lineItemId);
                 showToast({ type: "success", message: "Item Voided" });
               } catch (err) {
@@ -3530,71 +3606,84 @@ export default function SummaryScreen() {
                 </Text>
               </View>
 
-              <TouchableOpacity
-                style={[
-                  styles.proceedBtn,
-                  splitType === "items" &&
-                    Object.values(splitQuantities).every((q) => q === 0) &&
-                    extraSplitItems.length === 0 && { opacity: 0.5 },
-                ]}
-                disabled={
-                  splitType === "items" &&
-                  Object.values(splitQuantities).every((q) => q === 0) &&
-                  extraSplitItems.length === 0
-                }
-                onPress={() => {
-                  if (isWaiter()) {
-                    setShowSplitModal(false);
-                    router.replace("/(tabs)/category");
-                    return;
-                  }
-                  const canPay = permissions["OPRSET"]?.canAdd;
-                  if (!canPay) {
-                    if (Platform.OS === 'web') {
-                      router.replace("/(tabs)/category");
-                    } else {
-                      Alert.alert(
-                        "Access Denied",
-                        "You are not authorized to process payments.",
-                        [{ text: "OK", onPress: () => router.replace("/(tabs)/category") }]
-                      );
-                    }
-                    return;
-                  }
-                  const selectedItems = splitType === "items"
-                    ? [
-                        ...cart
-                          .map((item: any) => ({
-                            ...item,
-                            qty: splitQuantities[item.lineItemId] || 0,
-                          }))
-                          .filter((i: any) => i.qty > 0),
-                        ...extraSplitItems,
-                      ]
-                    : cart.map((item: any) => ({
-                        ...item,
-                        qty: Math.round((item.qty / partCount) * 1000) / 1000,
-                      }));
+              <View style={splitType === "parts" ? { flexDirection: "row", gap: 10, width: "100%" } : {}}>
+                {splitType === "parts" && (
+                  <TouchableOpacity
+                    style={[styles.proceedBtn, { flex: 1, backgroundColor: "#4A5568" }]}
+                    onPress={handlePrintSplitPartsBills}
+                  >
+                    <Ionicons name="print-outline" size={22} color="#fff" />
+                    <Text style={styles.proceedText}>Print Split Bills</Text>
+                  </TouchableOpacity>
+                )}
 
-                  if (splitType === "parts") {
-                    useCartStore.getState().setSplitPartsCount(partCount);
-                  } else {
-                    useCartStore.getState().setSplitPartsCount(null);
+                <TouchableOpacity
+                  style={[
+                    styles.proceedBtn,
+                    splitType === "parts" && { flex: 1 },
+                    splitType === "items" &&
+                      Object.values(splitQuantities).every((q) => q === 0) &&
+                      extraSplitItems.length === 0 && { opacity: 0.5 },
+                  ]}
+                  disabled={
+                    splitType === "items" &&
+                    Object.values(splitQuantities).every((q) => q === 0) &&
+                    extraSplitItems.length === 0
                   }
-                  useCartStore.getState().setActiveSplitItems(selectedItems);
-                  setShowSplitModal(false);
-                  router.push({
-                    pathname: "/payment",
-                    params: {
-                      mobileNo: loyaltyPhone ? `${selectedCountry.code} ${loyaltyPhone.trim()}` : "",
-                      customerName: loyaltyName || "",
-                    },
-                  });
-                }}
-              >
-                <Ionicons name="card-outline" size={22} color="#fff" />
-                <Text style={styles.proceedText}>Pay Separate Amount</Text>
-              </TouchableOpacity>
+                  onPress={() => {
+                    if (isWaiter()) {
+                      setShowSplitModal(false);
+                      router.replace("/(tabs)/category");
+                      return;
+                    }
+                    const canPay = permissions["OPRSET"]?.canAdd;
+                    if (!canPay) {
+                      if (Platform.OS === 'web') {
+                        router.replace("/(tabs)/category");
+                      } else {
+                        Alert.alert(
+                          "Access Denied",
+                          "You are not authorized to process payments.",
+                          [{ text: "OK", onPress: () => router.replace("/(tabs)/category") }]
+                        );
+                      }
+                      return;
+                    }
+                    const selectedItems = splitType === "items"
+                      ? [
+                          ...cart
+                            .map((item: any) => ({
+                              ...item,
+                              qty: splitQuantities[item.lineItemId] || 0,
+                            }))
+                            .filter((i: any) => i.qty > 0),
+                          ...extraSplitItems,
+                        ]
+                      : cart.map((item: any) => ({
+                          ...item,
+                          qty: Math.round((item.qty / partCount) * 1000) / 1000,
+                        }));
+
+                    if (splitType === "parts") {
+                      useCartStore.getState().setSplitPartsCount(partCount);
+                    } else {
+                      useCartStore.getState().setSplitPartsCount(null);
+                    }
+                    useCartStore.getState().setActiveSplitItems(selectedItems);
+                    setShowSplitModal(false);
+                    router.push({
+                      pathname: "/payment",
+                      params: {
+                        mobileNo: loyaltyPhone ? `${selectedCountry.code} ${loyaltyPhone.trim()}` : "",
+                        customerName: loyaltyName || "",
+                      },
+                    });
+                  }}
+                >
+                  <Ionicons name="card-outline" size={22} color="#fff" />
+                  <Text style={styles.proceedText}>Pay Separate Amount</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </View>

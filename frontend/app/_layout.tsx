@@ -230,6 +230,10 @@ SplashScreen.preventAutoHideAsync();
 
 import { useGlobalSocketSync } from "@/hooks/useGlobalSocketSync";
 import { API_URL } from "@/constants/Config";
+import { setApiUrl } from "@unipro/customer-display";
+
+// Propagate API URL to local package stores
+setApiUrl(API_URL);
 
 // 🌐 GLOBAL FETCH RETRY & IDEMPOTENCY ENGINE
 const originalFetch = global.fetch;

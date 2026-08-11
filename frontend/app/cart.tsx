@@ -265,12 +265,14 @@ export default function CartScreen() {
   }, [activeOrders, orderContext]);
 
   const displayItems = useMemo(() => {
-    return [...cart].sort((a, b) => {
-      const timeA = a.DateCreated ? new Date(a.DateCreated).getTime() : 0;
-      const timeB = b.DateCreated ? new Date(b.DateCreated).getTime() : 0;
-      if (timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) { return timeA - timeB; }
-      return String(a.lineItemId).localeCompare(String(b.lineItemId));
-    });
+    return cart
+      .filter((i: any) => i.status !== "VOIDED" && i.StatusCode !== 0 && i.statusCode !== 0)
+      .sort((a, b) => {
+        const timeA = a.DateCreated ? new Date(a.DateCreated).getTime() : 0;
+        const timeB = b.DateCreated ? new Date(b.DateCreated).getTime() : 0;
+        if (timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) { return timeA - timeB; }
+        return String(a.lineItemId).localeCompare(String(b.lineItemId));
+      });
   }, [cart]);
 
   const globalIndexMap = useMemo(() => {

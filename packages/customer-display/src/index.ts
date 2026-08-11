@@ -3,7 +3,7 @@ export type { DisplayState, DisplayItem } from './types/DisplayState';
 export { DEFAULT_STATE } from './types/DisplayState';
 export { Theme } from './constants/theme';
 export { Fonts } from './constants/Fonts';
-export { API_URL } from './constants/Config';
+export { API_URL, setApiUrl } from './constants/Config';
 export { useCompanySettingsStore } from './stores/companySettingsStore';
 export type { CompanySettings } from './stores/companySettingsStore';
 export { usePaymentSettingsStore } from './stores/paymentSettingsStore';

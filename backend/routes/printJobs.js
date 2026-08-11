@@ -77,15 +77,22 @@ router.get('/pending', authenticateBridge, async (req, res) => {
   try {
     await transaction.begin();
     
-    // Select pending jobs
+    // Select pending jobs with database-level row locking and skipping locked rows
     const selectReq = new sql.Request(transaction);
     const result = await selectReq
       .input('StoreId', sql.NVarChar(50), req.storeId)
       .query(`
-        SELECT JobId, StoreId, PrinterName, PrinterIp, PrinterPort, Content, Status, Attempts
-        FROM PrintJobQueue
+        SELECT JobId, StoreId, PrinterName, PrinterIp, PrinterPort, Content, Status, Attempts, ProcessedOn
+        FROM PrintJobQueue WITH (UPDLOCK, READPAST)
         WHERE StoreId = @StoreId 
-          AND (Status = 'PENDING' OR (Status = 'PROCESSING' AND DATEDIFF(minute, ProcessedOn, GETDATE()) >= 2 AND Attempts < 3))
+          AND (
+            (Status = 'PENDING' AND (
+              Attempts = 0 
+              OR (Attempts = 1 AND DATEDIFF(second, ProcessedOn, GETDATE()) >= 2)
+              OR (Attempts = 2 AND DATEDIFF(second, ProcessedOn, GETDATE()) >= 5)
+            ))
+            OR (Status = 'PROCESSING' AND DATEDIFF(minute, ProcessedOn, GETDATE()) >= 2 AND Attempts < 3)
+          )
         ORDER BY CreatedOn ASC
       `);
 
@@ -111,6 +118,11 @@ router.get('/pending', authenticateBridge, async (req, res) => {
         SET Status = 'PROCESSING', ProcessedOn = GETDATE(), Attempts = Attempts + 1
         WHERE JobId IN (${jobIds})
       `);
+
+      // Log picked jobs
+      jobs.forEach(job => {
+        console.log(`[PrintQueue] Job picked: ID=${job.JobId}, Printer=${job.PrinterName} (${job.PrinterIp}:${job.PrinterPort}), Attempt=${job.Attempts + 1}`);
+      });
     }
 
     await transaction.commit();
@@ -133,10 +145,11 @@ router.post('/:jobId/complete', authenticateBridge, async (req, res) => {
       .input('JobId', sql.UniqueIdentifier, jobId)
       .query(`
         UPDATE PrintJobQueue
-        SET Status = 'COMPLETED', CompletedOn = GETDATE()
+        SET Status = 'COMPLETED', CompletedOn = GETDATE(), ErrorMessage = NULL
         WHERE JobId = @JobId
       `);
 
+    console.log(`[PrintQueue] Print successful: JobId=${jobId}`);
     res.json({ success: true, message: 'Job completed successfully' });
   } catch (err) {
     console.error('Error completing print job:', err);
@@ -144,21 +157,45 @@ router.post('/:jobId/complete', authenticateBridge, async (req, res) => {
   }
 });
 
-// 4. POST /api/print-jobs/:jobId/failed - Mark job as failed
+// 4. POST /api/print-jobs/:jobId/failed - Mark job as failed or schedule retry
 router.post('/:jobId/failed', authenticateBridge, async (req, res) => {
   try {
     const { jobId } = req.params;
     const { errorMessage } = req.body;
     const pool = getPool();
 
-    await pool.request()
+    // Query attempts to determine if we should retry
+    const jobRes = await pool.request()
       .input('JobId', sql.UniqueIdentifier, jobId)
-      .input('ErrorMessage', sql.NVarChar(sql.MAX), errorMessage || 'Unknown Error')
-      .query(`
-        UPDATE PrintJobQueue
-        SET Status = 'FAILED', ErrorMessage = @ErrorMessage, CompletedOn = GETDATE()
-        WHERE JobId = @JobId
-      `);
+      .query("SELECT Attempts, PrinterName, PrinterIp, PrinterPort FROM PrintJobQueue WHERE JobId = @JobId");
+    
+    const job = jobRes.recordset[0];
+    const attempts = job ? job.Attempts : 0;
+    const printerInfo = job ? `${job.PrinterName} (${job.PrinterIp}:${job.PrinterPort})` : 'Unknown Printer';
+
+    if (attempts < 3) {
+      // Revert status to PENDING so it can be retried after the delay
+      await pool.request()
+        .input('JobId', sql.UniqueIdentifier, jobId)
+        .input('ErrorMessage', sql.NVarChar(sql.MAX), errorMessage || 'Unknown Error')
+        .query(`
+          UPDATE PrintJobQueue
+          SET Status = 'PENDING', ErrorMessage = @ErrorMessage
+          WHERE JobId = @JobId
+        `);
+      console.log(`[PrintQueue] Printer connection failed on ${printerInfo}: ${errorMessage}. Retry attempt ${attempts}/3 scheduled for JobId=${jobId}`);
+    } else {
+      // Mark as permanently FAILED
+      await pool.request()
+        .input('JobId', sql.UniqueIdentifier, jobId)
+        .input('ErrorMessage', sql.NVarChar(sql.MAX), errorMessage || 'Unknown Error')
+        .query(`
+          UPDATE PrintJobQueue
+          SET Status = 'FAILED', ErrorMessage = @ErrorMessage, CompletedOn = NULL
+          WHERE JobId = @JobId
+        `);
+      console.log(`[PrintQueue] Job failed after 3 attempts on ${printerInfo}: ${errorMessage}. JobId=${jobId}`);
+    }
 
     res.json({ success: true, message: 'Job failure recorded' });
   } catch (err) {

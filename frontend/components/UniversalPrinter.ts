@@ -6,7 +6,7 @@ import * as Sharing from "expo-sharing";
 import { Alert, Platform } from "react-native";
 import ThermalPrinter from "react-native-thermal-printer";
 import { API_URL } from "../constants/Config";
-import { formatToSingaporeDate, formatToSingaporeTime, formatToSingaporeDateTime } from "../utils/timezoneHelper";
+import { formatToSingaporeDate, formatToSingaporeTime, formatToSingaporeDateTime, parseDatabaseDate } from "../utils/timezoneHelper";
 import BillPDFGenerator from "./BillPDFGenerator";
 import { PrinterDetector } from "./PrinterDetector";
 import SunmiPrinterService from "./SunmiPrinterService";
@@ -881,7 +881,7 @@ class UniversalPrinter {
             padding: 5px 8px; 
             text-align: center; 
             font-weight: bold; 
-            font-size: 24px; 
+            font-size: 32px; 
             display: block;
             margin-bottom: 4px;
             text-transform: uppercase;
@@ -889,7 +889,7 @@ class UniversalPrinter {
           }
           
           .timestamp {
-            font-size: 14px;
+            font-size: 18px;
             font-weight: bold;
             margin-bottom: 8px;
             color: #333;
@@ -902,7 +902,7 @@ class UniversalPrinter {
             border-bottom: 2px dashed #000;
             padding: 3px 0;
             margin-bottom: 6px;
-            font-size: 20px;
+            font-size: 28px;
             font-weight: 900;
           }
           
@@ -910,7 +910,7 @@ class UniversalPrinter {
             display: flex;
             border-bottom: 1.5px dashed #000;
             padding: 3px 0;
-            font-size: 16px;
+            font-size: 22px;
             font-weight: bold;
             text-transform: uppercase;
           }
@@ -927,7 +927,7 @@ class UniversalPrinter {
           }
           
           .item-qty {
-            font-size: 24px;
+            font-size: 32px;
             font-weight: 900;
             width: 50px;
             line-height: 1;
@@ -935,7 +935,7 @@ class UniversalPrinter {
           }
           
           .item-name {
-            font-size: 22px;
+            font-size: 30px;
             font-weight: 900;
             flex: 1;
             line-height: 1.1;
@@ -947,7 +947,7 @@ class UniversalPrinter {
           }
           
           .modifier-item {
-            font-size: 20px;
+            font-size: 26px;
             font-weight: 900;
             color: #000;
             display: block;
@@ -955,21 +955,21 @@ class UniversalPrinter {
           
           .remarks {
             margin-left: 58px;
-            font-size: 20px;
+            font-size: 26px;
             font-weight: 900;
             margin-top: 4px;
           }
           
           .footer {
             margin-top: 10px;
-            font-size: 14px;
+            font-size: 18px;
             font-weight: bold;
             font-family: monospace;
           }
           
           .kitchen-name {
             text-align: center;
-            font-size: 24px;
+            font-size: 32px;
             font-weight: bold;
             margin-top: 16px;
             text-transform: uppercase;
@@ -1014,7 +1014,7 @@ class UniversalPrinter {
 
                 return Object.entries(kitchenGroups).map(([kName, groupItems]) => {
                   return `
-                    <div style="font-size: 18px; font-weight: bold; margin-top: 15px; border-bottom: 2px solid #000; padding-bottom: 3px; text-transform: uppercase;">
+                    <div style="font-size: 24px; font-weight: bold; margin-top: 15px; border-bottom: 2px solid #000; padding-bottom: 3px; text-transform: uppercase;">
                       <b>${kName}</b>
                     </div>
                     ${groupItems.map((item: any) => {
@@ -1031,7 +1031,7 @@ class UniversalPrinter {
                             <div class="item-qty">${item.quantity || item.qty || 1}</div>
                             <div class="item-name">
                               ${(item.name || "").replace(/\n/g, '<br/>')}
-                              ${item.songName || item.SongName ? `<div style="font-size: 20px; font-weight: normal; color: #555; margin-top: 4px;">🎵 ${item.songName || item.SongName}</div>` : ''}
+                              ${item.songName || item.SongName ? `<div style="font-size: 26px; font-weight: normal; color: #555; margin-top: 4px;">🎵 ${item.songName || item.SongName}</div>` : ''}
                             </div>
                           </div>
                           ${
@@ -1077,7 +1077,7 @@ class UniversalPrinter {
                       <div class="item-qty">${item.quantity || item.qty || 1}</div>
                       <div class="item-name">
                         ${(item.name || "").replace(/\n/g, '<br/>')}
-                        ${item.songName || item.SongName ? `<div style="font-size: 20px; font-weight: normal; color: #555; margin-top: 4px;">🎵 ${item.songName || item.SongName}</div>` : ''}
+                        ${item.songName || item.SongName ? `<div style="font-size: 26px; font-weight: normal; color: #555; margin-top: 4px;">🎵 ${item.songName || item.SongName}</div>` : ''}
                       </div>
                     </div>
                     ${
@@ -1169,8 +1169,8 @@ class UniversalPrinter {
     const DIV = "[L]------------------------------------------------\n";
 
     // Item wrapping constants (ESC/POS width alignments)
-    const DISH_WRAP = 19;
-    const BIG_MOD_WRAP = 20;   // big-font chars available for modifiers (24 - 4 chars margin/prefix)
+    const DISH_WRAP = 20;
+    const BIG_MOD_WRAP = 20;   // big-font chars available for modifiers
 
     // ── Helper: wrap text ─────────────────────────────────────────────
     const wrapText = (str: string, maxChars: number): string[] => {
@@ -1198,19 +1198,19 @@ class UniversalPrinter {
       const qtyNum   = item.quantity || item.qty || 1;
       const itemName = item.name || item.DishName || "";
 
-      // Item name: big + bold, wrapped at 19 chars
+      // Item name: big font (double height + width), wrapped at 20 chars
       wrapText(itemName.replace(/\n/g, " "), DISH_WRAP).forEach((chunk: string, idx: number) => {
-        if (idx === 0) t += `[L]<font size="big"><B>[${qtyNum}] ${chunk}</B></font>\n`;
-        else           t += `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
+        if (idx === 0) t += `[L]<font size='big'><B>[${qtyNum}] ${chunk}</B></font>\n`;
+        else           t += `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
       });
 
       // Song name
       const songName = item.songName || item.SongName || "";
-      if (songName) t += `[L]<font size="big"><B>  ♪ ${songName}</B></font>\n`;
+      if (songName) t += `[L]<font size='big'><B>  ♪ ${songName}</B></font>\n`;
 
       // Takeaway flag
       const isTw = !!(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
-      if (isTw) t += `[L]<font size="big"><B>  >> TAKEAWAY <<</B></font>\n`;
+      if (isTw) t += `[L]<font size='big'><B>  >> TAKEAWAY <<</B></font>\n`;
 
       // Modifiers: big font, wraps at 20 chars
       if (item.modifiers && item.modifiers.length > 0) {
@@ -1218,7 +1218,7 @@ class UniversalPrinter {
           const modName = m.ModifierName || m.modifierName || m.name || m.ModifierNameEn || "";
           if (modName) {
             wrapText(modName, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
-              t += idx === 0 ? `[L]<font size="big"><B>  + ${chunk}</B></font>\n` : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
+              t += idx === 0 ? `[L]<font size='big'><B>  + ${chunk}</B></font>\n` : `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
             });
           }
         });
@@ -1252,7 +1252,7 @@ class UniversalPrinter {
               const optName = opt.name || opt.DishName || opt.itemName || "";
               if (optName) {
                 wrapText(optName, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
-                  t += idx === 0 ? `[L]<font size="big"><B>  - ${chunk}</B></font>\n` : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
+                  t += idx === 0 ? `[L]<font size='big'><B>  - ${chunk}</B></font>\n` : `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
                 });
               }
             });
@@ -1264,7 +1264,7 @@ class UniversalPrinter {
       const noteText = item.note || item.notes || item.Remarks || item.remarks;
       if (noteText) {
         wrapText(noteText, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
-          t += idx === 0 ? `[L]<font size="big"><B>  * ${chunk}</B></font>\n` : `[L]<font size="big"><B>    ${chunk}</B></font>\n`;
+          t += idx === 0 ? `[L]<font size='big'><B>  * ${chunk}</B></font>\n` : `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
         });
       }
 
@@ -1275,20 +1275,20 @@ class UniversalPrinter {
     let text = "";
     // 25mm top side white space (approx 6 empty lines)
     text += "[L]\n".repeat(6);
-    text += `[C]<font size="big"><B>${title}</B></font>\n`;
-    text += `[C]<font size="big"><B>${kotDateStr}  ${kotTimeStr}</B></font>\n`;
+    text += `[C]<font size='big'><B>${title}</B></font>\n`;
+    text += `[C]<font size='big'><B>${kotDateStr}  ${kotTimeStr}</B></font>\n`;
     text += DIV;
 
     // TABLE visible at top for both KOT and KDS
     if (type === "KDS_PRINT") {
-      text += `[C]<font size="big"><B>TABLE NO : ${tableNo}</B></font>\n`;
+      text += `[C]<font size='big'><B>TABLE NO : ${tableNo}</B></font>\n`;
       text += DIV;
     } else {
-      text += `[C]<font size="big"><B>TABLE : ${tableNo}</B></font>\n`;
+      text += `[C]<font size='big'><B>TABLE : ${tableNo}</B></font>\n`;
       text += DIV;
     }
 
-    text += "[L]<font size=\"big\"><B>QTY  ITEM</B></font>\n";
+    text += "[L]<font size='big'><B>QTY  ITEM</B></font>\n";
     text += DIV;
 
     // ── ITEMS ─────────────────────────────────────────────────────────
@@ -1302,7 +1302,7 @@ class UniversalPrinter {
       });
 
       for (const [kName, groupItems] of Object.entries(groups)) {
-        text += `[C]<font size="big"><B>${kName}</B></font>\n`;
+        text += `[C]<font size='big'><B>${kName}</B></font>\n`;
         text += DIV;
         groupItems.forEach((item: any, idx: number) => {
           text += formatItem(item);
@@ -1311,17 +1311,32 @@ class UniversalPrinter {
         text += DIV;
       }
     } else {
-      // KOT: flat list
-      items.forEach((item: any, idx: number) => {
-        text += formatItem(item);
-        if (idx < items.length - 1) text += "[L]\n"; // blank line between items
+      // KOT: group by kitchen section (same as KDS, for alignment)
+      const kotGroups: Record<string, any[]> = {};
+      items.forEach((item: any) => {
+        const k = (item.KitchenTypeName || item.kitchenTypeName || item.dishGroupName || item.categoryName || "KITCHEN").toUpperCase().trim();
+        if (!kotGroups[k]) kotGroups[k] = [];
+        kotGroups[k].push(item);
       });
-      text += DIV;
+
+      const kotGroupEntries = Object.entries(kotGroups);
+      kotGroupEntries.forEach(([kName, groupItems]: [string, any[]], gIdx: number) => {
+        // Only show section header if there are multiple kitchens
+        if (kotGroupEntries.length > 1) {
+          text += `[C]<font size='big'><B>--- ${kName} ---</B></font>\n`;
+          text += DIV;
+        }
+        groupItems.forEach((item: any, idx: number) => {
+          text += formatItem(item);
+          if (idx < groupItems.length - 1) text += "[L]\n";
+        });
+        text += DIV;
+      });
     }
 
     // ── FOOTER ────────────────────────────────────────────────────────
-    text += `[L]<font size="big"><B>Order By : ${waiter}</B></font>\n`;
-    text += `[L]<font size="big"><B>Order No : ${orderNo}</B></font>\n`;
+    text += `[L]<font size='big'><B>Order By : ${waiter}</B></font>\n`;
+    text += `[L]<font size='big'><B>Order No : ${orderNo}</B></font>\n`;
 
     if (type !== "KDS_PRINT") {
       // KOT: Kitchen Name + Table Number always at the very bottom
@@ -1334,10 +1349,13 @@ class UniversalPrinter {
             : "");
       if (kotLabel) {
         text += DIV;
-        text += `[C]<font size="big"><B>${kotLabel}</B></font>\n`;
+        text += `[C]<font size='big'><B>${kotLabel}</B></font>\n`;
         text += DIV;
       }
     }
+
+    // ── FEED LINES at end to prevent last line being cut ──────────────
+    text += "[L]\n".repeat(6);
 
     return text;
   }
@@ -1697,15 +1715,15 @@ class UniversalPrinter {
     if (company.email) text += `[C]Email: ${company.email}\n`;
     text += "[C]------------------------------------------------\n";
 
-    const saleDate = saleData.originalDate ? new Date(saleData.originalDate) : 
-                     saleData.date ? new Date(saleData.date) : 
+    const saleDate = saleData.originalDate ? parseDatabaseDate(saleData.originalDate) : 
+                     saleData.date ? parseDatabaseDate(saleData.date) : 
                      new Date();
 
     text += `[L]Bill No: ${saleData.invoiceNumber || saleData.id || ""}\n`;
     if (saleData.tableNo) {
       text += `[L]<font size=\'big\'><B>TABLE: ${saleData.tableNo}</B></font>\n`;
     }
-    const dateFormatted = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(saleDate);
+    const dateFormatted = formatToSingaporeDate(saleDate, { day: '2-digit', month: '2-digit', year: 'numeric' });
     text += `[L]Date: ${dateFormatted} ${formatToSingaporeTime(saleDate)}\n`;
     if (saleData.waiterName && saleData.waiterName !== "Staff") {
       text += `[L]Waiter: ${saleData.waiterName}\n`;
@@ -2270,13 +2288,9 @@ class UniversalPrinter {
   }
 
   static async processPendingPrintJobs(): Promise<void> {
-    const isCustomer =
-      Platform.OS === "web" &&
-      typeof window !== "undefined" &&
-      window?.location &&
-      (window.location.pathname?.includes("/customer") ||
-        window.location.href?.includes("/customer"));
-    if (isCustomer) return; // Customer web clients must never execute any printing logic.
+    // Web clients must never pull and process the print job queue.
+    // The print queue is meant for native apps or a desktop print bridge daemon.
+    if ((Platform.OS as string) === "web") return;
 
     try {
       const { useAuthStore } = require("../stores/authStore");
@@ -2309,70 +2323,93 @@ class UniversalPrinter {
       }
 
       const jobs = data.data;
+      if (jobs.length === 0) return;
+
+      // Group jobs by target Printer IP to process different printers in parallel
+      const jobsByPrinter = new Map<string, any[]>();
       for (const job of jobs) {
-        const { JobId, PrinterIp, PrinterPort, Content } = job;
-        if (!Content || !PrinterIp) {
-          await fetch(`${API_URL}/api/print-jobs/${JobId}/failed`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ errorMessage: "Missing Printer IP or Content" })
-          });
-          continue;
+        const printerKey = `${job.PrinterIp || ""}:${job.PrinterPort || 9100}`;
+        if (!jobsByPrinter.has(printerKey)) {
+          jobsByPrinter.set(printerKey, []);
         }
+        jobsByPrinter.get(printerKey)!.push(job);
+      }
 
-        try {
-          const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(PrinterIp.trim());
-          let printSuccess = false;
-
-          if (Platform.OS === "web") {
-            // Web fallback: cashier web client shouldn't process directly if daemon is used.
-            // For now, let the desktop print bridge process it.
+      // Process each printer's queue sequentially, but run different printers in parallel
+      const printerPromises = Array.from(jobsByPrinter.values()).map(async (printerJobs) => {
+        for (const job of printerJobs) {
+          const { JobId, PrinterIp, PrinterPort, Content } = job;
+          if (!Content || !PrinterIp) {
+            await fetch(`${API_URL}/api/print-jobs/${JobId}/failed`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ errorMessage: "Missing Printer IP or Content" })
+            });
             continue;
           }
 
-          if (isIp) {
-            console.log(`🌐 [UniversalPrinter] WiFi print to: ${PrinterIp}`);
-            const printPromise = ThermalPrinter.printTcp({
-              ip: PrinterIp,
-              port: PrinterPort || 9100,
-              payload: Content,
-              mmFeedPaper: 25,
-            });
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("WiFi Timeout")), 5000)
-            );
-            await Promise.race([printPromise, timeoutPromise]);
-            printSuccess = true;
-          } else {
-            console.log(`🔵 [UniversalPrinter] Bluetooth print to: ${PrinterIp}`);
-            const printPromise = ThermalPrinter.printBluetooth({
-              macAddress: PrinterIp,
-              payload: Content,
-              mmFeedPaper: 25,
-            });
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("Bluetooth Timeout")), 5000)
-            );
-            await Promise.race([printPromise, timeoutPromise]);
-            printSuccess = true;
-          }
+          try {
+            const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(PrinterIp.trim());
+            let printSuccess = false;
 
-          if (printSuccess) {
-            await fetch(`${API_URL}/api/print-jobs/${JobId}/complete`, {
+            if ((Platform.OS as string) === "web") {
+              // Web fallback: cashier web client shouldn't process directly if daemon is used.
+              // For now, let the desktop print bridge process it.
+              continue;
+            }
+
+            console.log(`[PrintQueue] Printer connection started: PrinterIp=${PrinterIp}, Port=${PrinterPort || 9100}, JobId=${JobId}`);
+
+            if (isIp) {
+              console.log(`🌐 [UniversalPrinter] WiFi print to: ${PrinterIp}`);
+              const printPromise = ThermalPrinter.printTcp({
+                ip: PrinterIp,
+                port: PrinterPort || 9100,
+                payload: Content,
+                mmFeedPaper: 25,
+              });
+              const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Connection to printer timed out")), 5000)
+              );
+              await Promise.race([printPromise, timeoutPromise]);
+              printSuccess = true;
+            } else {
+              console.log(`🔵 [UniversalPrinter] Bluetooth print to: ${PrinterIp}`);
+              const printPromise = ThermalPrinter.printBluetooth({
+                macAddress: PrinterIp,
+                payload: Content,
+                mmFeedPaper: 25,
+              });
+              const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Connection to printer timed out")), 5000)
+              );
+              await Promise.race([printPromise, timeoutPromise]);
+              printSuccess = true;
+            }
+
+            if (printSuccess) {
+              console.log(`[PrintQueue] Print successful: JobId=${JobId}`);
+              await fetch(`${API_URL}/api/print-jobs/${JobId}/complete`, {
+                method: "POST",
+                headers
+              });
+              console.log(`✅ [UniversalPrinter] Print job ${JobId} completed successfully`);
+            }
+          } catch (printErr: any) {
+            const errorMsg = printErr.message || "Hardware print error";
+            console.log(`[PrintQueue] Printer connection failed: ${errorMsg}. JobId=${JobId}`);
+            console.error(`❌ [UniversalPrinter] Failed to print job ${JobId}:`, printErr);
+            await fetch(`${API_URL}/api/print-jobs/${JobId}/failed`, {
               method: "POST",
-              headers
+              headers,
+              body: JSON.stringify({ errorMessage: errorMsg })
             });
-            console.log(`✅ [UniversalPrinter] Print job ${JobId} completed successfully`);
           }
-        } catch (printErr: any) {
-          console.error(`❌ [UniversalPrinter] Failed to print job ${JobId}:`, printErr);
-          await fetch(`${API_URL}/api/print-jobs/${JobId}/failed`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ errorMessage: printErr.message || "Hardware print error" })
-          });
         }
-      }
+      });
+
+      await Promise.all(printerPromises);
+
     } catch (err: any) {
       console.error("[UniversalPrinter] processPendingPrintJobs error:", err.message);
     }

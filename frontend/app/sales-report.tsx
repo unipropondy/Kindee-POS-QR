@@ -163,6 +163,8 @@ export default function SalesReport() {
     { payMode: "CARD", description: "CARD" },
     { payMode: "NETS", description: "NETS" },
     { payMode: "PAYNOW", description: "PAY NOW" },
+    { payMode: "GRAB", description: "GRAB" },
+    { payMode: "FOODPANDA", description: "FOODPANDA" },
     { payMode: "MEMBER", description: "MEMBER" },
     { payMode: "CREDIT", description: "CREDIT" },
   ]);
@@ -184,6 +186,8 @@ export default function SalesReport() {
     "CARD",
     "NETS",
     "PAYNOW",
+    "GRAB",
+    "FOODPANDA",
     "VOID",
     "MEMBER",
     "CREDIT",
@@ -1150,6 +1154,8 @@ export default function SalesReport() {
         else if (mode === "CARD") acc.Card += s.SysAmount;
         else if (mode === "NETS") acc.Nets += s.SysAmount;
         else if (mode === "PAYNOW") acc.PayNow += s.SysAmount;
+        else if (mode === "GRAB") acc.Grab += s.SysAmount;
+        else if (mode === "FOODPANDA") acc.Foodpanda += s.SysAmount;
         else if (isUpi) acc.Upi += s.SysAmount;
         else if (mode === "MEMBER") {
           acc.Member += s.SysAmount;
@@ -1169,6 +1175,8 @@ export default function SalesReport() {
         Card: 0,
         Nets: 0,
         PayNow: 0,
+        Grab: 0,
+        Foodpanda: 0,
         Upi: 0,
         Member: 0,
         Credit: 0,
@@ -1196,6 +1204,8 @@ export default function SalesReport() {
     CARD: "#818cf8",
     NETS: "#3b82f6",
     PAYNOW: "#f59e0b",
+    GRAB: "#00b14f",
+    FOODPANDA: "#d70f64",
     UPI: "#f59e0b",
     MEMBER: "#ec4899",
     CREDIT: "#e11d48",
@@ -1217,6 +1227,8 @@ export default function SalesReport() {
     CARD: "💳",
     NETS: "🔳",
     PAYNOW: "📱",
+    GRAB: "💚",
+    FOODPANDA: "🐼",
     UPI: "📱",
     MEMBER: "👤",
     CREDIT: "🏷️",

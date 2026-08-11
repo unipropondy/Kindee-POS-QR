@@ -512,7 +512,8 @@ export default function PaymentScreen() {
   };
 
   const finalItemsRaw = useMemo(() => {
-    return splitItems || cart;
+    const baseItems = splitItems || cart;
+    return baseItems.filter((i: any) => i.status !== "VOIDED" && i.isVoided !== true && i.StatusCode !== 0 && i.statusCode !== 0);
   }, [splitItems, cart]);
 
   const [loyaltyDiscountItems, setLoyaltyDiscountItems] = useState<any[]>([]);
@@ -545,12 +546,16 @@ export default function PaymentScreen() {
         });
         const data = await res.json();
         if (data.success) {
-          const processed = (data.items || []).map((i: any) => ({
-            ...i,
-            qty: i.Qty !== undefined ? i.Qty : i.qty,
-            price: i.Price !== undefined ? i.Price : i.price,
-            name: i.name || finalItemsRaw.find((raw: any) => String(raw.id || raw.DishId || raw.dishId).toLowerCase() === String(i.DishId || i.id).toLowerCase())?.name || "Dish"
-          }));
+          const processed = (data.items || []).map((i: any) => {
+            const originalCartItem = finalItemsRaw.find((raw: any) => String(raw.id || raw.DishId || raw.dishId).toLowerCase() === String(i.DishId || i.id).toLowerCase()) || {};
+            return {
+              ...originalCartItem,
+              ...i,
+              qty: i.Qty !== undefined ? i.Qty : i.qty,
+              price: i.Price !== undefined ? i.Price : i.price,
+              name: i.name || originalCartItem.name || "Dish"
+            };
+          });
           setLoyaltyDiscountItems(processed);
           setLoyaltyDiscountAmount(data.totalDiscount || 0);
         } else {
@@ -868,9 +873,9 @@ export default function PaymentScreen() {
       const cached = usePaymentSettingsStore.getState().paymentMethods;
 
       const mapped: PaymentMethod[] = cached.map((d: CachedPaymentMethod) => ({
-        payMode: d.payMode || "",
-        description: d.description || d.payMode || "",
-        icon: getPaymodeIcon(d.payMode || ""),
+        payMode: (d.payMode || "").trim(),
+        description: (d.description || d.payMode || "").trim(),
+        icon: getPaymodeIcon((d.payMode || "").trim()),
         commission: d.commission,
         serviceCharge: d.serviceCharge,
         isEntertainment: d.isEntertainment,
