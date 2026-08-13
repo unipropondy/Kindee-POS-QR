@@ -1200,17 +1200,17 @@ class UniversalPrinter {
 
       // Item name: big font (double height + width), wrapped at 20 chars
       wrapText(itemName.replace(/\n/g, " "), DISH_WRAP).forEach((chunk: string, idx: number) => {
-        if (idx === 0) t += `[L]<font size='big'><B>[${qtyNum}] ${chunk}</B></font>\n`;
-        else           t += `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
+        if (idx === 0) t += `[L]<font size='big-2'><B>[${qtyNum}] ${chunk}</B></font>\n`;
+        else           t += `[L]<font size='big-2'><B>    ${chunk}</B></font>\n`;
       });
 
       // Song name
       const songName = item.songName || item.SongName || "";
-      if (songName) t += `[L]<font size='big'><B>  ♪ ${songName}</B></font>\n`;
+      if (songName) t += `[L]<font size='big-2'><B>  ♪ ${songName}</B></font>\n`;
 
       // Takeaway flag
       const isTw = !!(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
-      if (isTw) t += `[L]<font size='big'><B>  >> TAKEAWAY <<</B></font>\n`;
+      if (isTw) t += `[L]<font size='big-2'><B>  >> TAKEAWAY <<</B></font>\n`;
 
       // Modifiers: big font, wraps at 20 chars
       if (item.modifiers && item.modifiers.length > 0) {
@@ -1218,7 +1218,7 @@ class UniversalPrinter {
           const modName = m.ModifierName || m.modifierName || m.name || m.ModifierNameEn || "";
           if (modName) {
             wrapText(modName, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
-              t += idx === 0 ? `[L]<font size='big'><B>  + ${chunk}</B></font>\n` : `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
+              t += idx === 0 ? `[L]<font size='big-2'><B>  + ${chunk}</B></font>\n` : `[L]<font size='big-2'><B>    ${chunk}</B></font>\n`;
             });
           }
         });
@@ -1252,7 +1252,7 @@ class UniversalPrinter {
               const optName = opt.name || opt.DishName || opt.itemName || "";
               if (optName) {
                 wrapText(optName, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
-                  t += idx === 0 ? `[L]<font size='big'><B>  - ${chunk}</B></font>\n` : `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
+                  t += idx === 0 ? `[L]<font size='big-2'><B>  - ${chunk}</B></font>\n` : `[L]<font size='big-2'><B>    ${chunk}</B></font>\n`;
                 });
               }
             });
@@ -1264,7 +1264,7 @@ class UniversalPrinter {
       const noteText = item.note || item.notes || item.Remarks || item.remarks;
       if (noteText) {
         wrapText(noteText, BIG_MOD_WRAP).forEach((chunk: string, idx: number) => {
-          t += idx === 0 ? `[L]<font size='big'><B>  * ${chunk}</B></font>\n` : `[L]<font size='big'><B>    ${chunk}</B></font>\n`;
+          t += idx === 0 ? `[L]<font size='big-2'><B>  * ${chunk}</B></font>\n` : `[L]<font size='big-2'><B>    ${chunk}</B></font>\n`;
         });
       }
 
@@ -1275,20 +1275,20 @@ class UniversalPrinter {
     let text = "";
     // 25mm top side white space (approx 6 empty lines)
     text += "[L]\n".repeat(6);
-    text += `[C]<font size='big'><B>${title}</B></font>\n`;
-    text += `[C]<font size='big'><B>${kotDateStr}  ${kotTimeStr}</B></font>\n`;
+    text += `[C]<font size='big-2'><B>${title}</B></font>\n`;
+    text += `[C]<font size='big-2'><B>${kotDateStr}  ${kotTimeStr}</B></font>\n`;
     text += DIV;
 
     // TABLE visible at top for both KOT and KDS
     if (type === "KDS_PRINT") {
-      text += `[C]<font size='big'><B>TABLE NO : ${tableNo}</B></font>\n`;
+      text += `[C]<font size='big-2'><B>TABLE NO : ${tableNo}</B></font>\n`;
       text += DIV;
     } else {
-      text += `[C]<font size='big'><B>TABLE : ${tableNo}</B></font>\n`;
+      text += `[C]<font size='big-2'><B>TABLE : ${tableNo}</B></font>\n`;
       text += DIV;
     }
 
-    text += "[L]<font size='big'><B>QTY  ITEM</B></font>\n";
+    text += "[L]<font size='big-2'><B>QTY  ITEM</B></font>\n";
     text += DIV;
 
     // ── ITEMS ─────────────────────────────────────────────────────────
@@ -1302,7 +1302,7 @@ class UniversalPrinter {
       });
 
       for (const [kName, groupItems] of Object.entries(groups)) {
-        text += `[C]<font size='big'><B>${kName}</B></font>\n`;
+        text += `[C]<font size='big-2'><B>--- ${kName} ---</B></font>\n`;
         text += DIV;
         groupItems.forEach((item: any, idx: number) => {
           text += formatItem(item);
@@ -1323,7 +1323,7 @@ class UniversalPrinter {
       kotGroupEntries.forEach(([kName, groupItems]: [string, any[]], gIdx: number) => {
         // Only show section header if there are multiple kitchens
         if (kotGroupEntries.length > 1) {
-          text += `[C]<font size='big'><B>--- ${kName} ---</B></font>\n`;
+          text += `[C]<font size='big-2'><B>--- ${kName} ---</B></font>\n`;
           text += DIV;
         }
         groupItems.forEach((item: any, idx: number) => {
@@ -1335,8 +1335,8 @@ class UniversalPrinter {
     }
 
     // ── FOOTER ────────────────────────────────────────────────────────
-    text += `[L]<font size='big'><B>Order By : ${waiter}</B></font>\n`;
-    text += `[L]<font size='big'><B>Order No : ${orderNo}</B></font>\n`;
+    text += `[L]<font size='big-2'><B>Order By : ${waiter}</B></font>\n`;
+    text += `[L]<font size='big-2'><B>Order No : ${orderNo}</B></font>\n`;
 
     if (type !== "KDS_PRINT") {
       // KOT: Kitchen Name + Table Number always at the very bottom
@@ -1349,7 +1349,7 @@ class UniversalPrinter {
             : "");
       if (kotLabel) {
         text += DIV;
-        text += `[C]<font size='big'><B>${kotLabel}</B></font>\n`;
+        text += `[C]<font size='big-2'><B>${kotLabel}</B></font>\n`;
         text += DIV;
       }
     }
@@ -1701,15 +1701,15 @@ class UniversalPrinter {
     // 📏 80mm standard is ~48 characters
     let text = "[C]================================================\n";
     if (isCheckout) {
-      text += "[C]<font size='big'><B>CHECKOUT BILL</B></font>\n";
+      text += "[C]<font size='big-2'><B>CHECKOUT BILL</B></font>\n";
       text += "[C]<B>PAYMENT PENDING</B>\n";
     } else {
-      text += "[C]<font size='big'><B>PAYMENT RECEIPT</B></font>\n";
+      text += "[C]<font size='big-2'><B>PAYMENT RECEIPT</B></font>\n";
     }
     text += "[C]================================================\n";
 
     // Header Info
-    text += `[C]<font size='big'><B>${(company.name || "YOUR STORE").toUpperCase()}</B></font>\n`;
+    text += `[C]<font size='big-2'><B>${(company.name || "YOUR STORE").toUpperCase()}</B></font>\n`;
     if (company.address) text += `[C]${company.address}\n`;
     if (company.phone) text += `[C]Tel: ${company.phone}\n`;
     if (company.email) text += `[C]Email: ${company.email}\n`;
@@ -1721,7 +1721,7 @@ class UniversalPrinter {
 
     text += `[L]Bill No: ${saleData.invoiceNumber || saleData.id || ""}\n`;
     if (saleData.tableNo) {
-      text += `[L]<font size=\'big\'><B>TABLE: ${saleData.tableNo}</B></font>\n`;
+      text += `[L]<font size=\'big-2\'><B>TABLE: ${saleData.tableNo}</B></font>\n`;
     }
     const dateFormatted = formatToSingaporeDate(saleDate, { day: '2-digit', month: '2-digit', year: 'numeric' });
     text += `[L]Date: ${dateFormatted} ${formatToSingaporeTime(saleDate)}\n`;
@@ -1990,7 +1990,7 @@ class UniversalPrinter {
       }
     }
 
-    text += `[R]<font size=\'big\'><B>TOTAL: ${symbol}${finalTotal.toFixed(2)}</B></font>\n`;
+    text += `[R]<font size=\'big-2\'><B>TOTAL: ${symbol}${finalTotal.toFixed(2)}</B></font>\n`;
     text += "[C]================================================\n";
 
     // 🏆 Print Reward point transaction stats

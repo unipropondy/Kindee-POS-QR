@@ -1027,7 +1027,7 @@ router.get("/settlement", async (req, res) => {
         INNER JOIN Paymode pm ON pm.Position = ptd.PayModeId
         LEFT JOIN MemberMaster mm ON ptd.ReferenceId = mm.MemberId
         WHERE ptd.ReferenceType = 'MEMBER'
-          AND ${appDateWhereSql.replace(/sh\.LastSettlementDate/g, 'ptd.CreatedDate')}
+          AND ${appDateWhereSql.replace(/sh\.LastSettlementDate/g, 'ptd.CreatedDate').replace(/sh\.start_date/g, 'ptd.CreatedDate')}
         GROUP BY mm.MemberId, pm.Description
       )
       SELECT Paymode, SUM(SysAmount) as SysAmount, SUM(ManualAmount) as ManualAmount, SUM(SortageOrExces) as SortageOrExces, SUM(ReceiptCount) as ReceiptCount

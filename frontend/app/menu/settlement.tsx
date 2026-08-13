@@ -41,28 +41,76 @@ function CustomDateTimePicker({ visible, onClose, selectedDate, onApply, title }
   const { width } = useWindowDimensions();
   const isTablet = width >= 640;
 
-  const [viewDate, setViewDate] = useState(() => new Date(selectedDate));
-  const [selectedDay, setSelectedDay] = useState(() => new Date(selectedDate));
+  const getSgtComponents = (d: Date) => {
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Singapore',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(d);
+    const yearVal = parseInt(parts.find(p => p.type === 'year')?.value || '0', 10);
+    const monthVal = parseInt(parts.find(p => p.type === 'month')?.value || '1', 10) - 1;
+    const dayVal = parseInt(parts.find(p => p.type === 'day')?.value || '1', 10);
+    return { year: yearVal, month: monthVal, day: dayVal };
+  };
+
+  const [viewDate, setViewDate] = useState(() => {
+    const { year, month, day } = getSgtComponents(selectedDate);
+    return new Date(year, month, day);
+  });
+  const [selectedDay, setSelectedDay] = useState(() => {
+    const { year, month, day } = getSgtComponents(selectedDate);
+    return new Date(year, month, day);
+  });
   
   // Time states
   const [hour, setHour] = useState(() => {
-    let h = selectedDate.getHours();
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Singapore',
+      hour: '2-digit',
+      hour12: false
+    }).formatToParts(selectedDate);
+    let h = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
     h = h % 12;
     return h === 0 ? 12 : h;
   });
-  const [minute, setMinute] = useState(() => selectedDate.getMinutes());
-  const [amPm, setAmPm] = useState<"AM" | "PM">(() => selectedDate.getHours() >= 12 ? "PM" : "AM");
+  const [minute, setMinute] = useState(() => {
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Singapore',
+      minute: '2-digit'
+    }).formatToParts(selectedDate);
+    return parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
+  });
+  const [amPm, setAmPm] = useState<"AM" | "PM">(() => {
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Singapore',
+      hour: '2-digit',
+      hour12: false
+    }).formatToParts(selectedDate);
+    const h = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+    return h >= 12 ? "PM" : "AM";
+  });
 
   // Sync state when selectedDate changes or modal opens
   useEffect(() => {
     if (visible) {
-      setViewDate(new Date(selectedDate));
-      setSelectedDay(new Date(selectedDate));
-      let h = selectedDate.getHours();
-      const ampm = h >= 12 ? "PM" : "AM";
-      h = h % 12;
-      setHour(h === 0 ? 12 : h);
-      setMinute(selectedDate.getMinutes());
+      const { year, month, day } = getSgtComponents(selectedDate);
+      setViewDate(new Date(year, month, day));
+      setSelectedDay(new Date(year, month, day));
+      
+      const parts = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: 'Asia/Singapore',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      }).formatToParts(selectedDate);
+      let hSgt = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+      const minSgt = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
+      
+      const ampm = hSgt >= 12 ? "PM" : "AM";
+      hSgt = hSgt % 12;
+      setHour(hSgt === 0 ? 12 : hSgt);
+      setMinute(minSgt);
       setAmPm(ampm);
     }
   }, [visible, selectedDate]);
@@ -142,9 +190,12 @@ function CustomDateTimePicker({ visible, onClose, selectedDate, onApply, title }
   };
 
   const handleApply = () => {
-    const finalDate = new Date(selectedDay);
-    // Keep the hours/minutes/seconds of the original selectedDate
-    finalDate.setHours(selectedDate.getHours(), selectedDate.getMinutes(), selectedDate.getSeconds(), selectedDate.getMilliseconds());
+    const y = selectedDay.getFullYear();
+    const m = String(selectedDay.getMonth() + 1).padStart(2, '0');
+    const d = String(selectedDay.getDate()).padStart(2, '0');
+    const isTo = title.toLowerCase().includes("to") || title.toLowerCase().includes("end");
+    const timeSuffix = isTo ? "T23:59:59+08:00" : "T00:00:00+08:00";
+    const finalDate = new Date(`${y}-${m}-${d}${timeSuffix}`);
     onApply(finalDate);
     onClose();
   };
@@ -630,8 +681,37 @@ const [artistSearch, setArtistSearch] = useState("");
   const [closingCounts, setClosingCounts] = useState<Record<string, string>>(initialCounts);
 
   const pad = (n: number) => n.toString().padStart(2, '0');
-  const formatLocal = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-  const getLocalDateStr = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const formatLocal = (d: Date) => {
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Singapore',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).formatToParts(d);
+    const y = parts.find(p => p.type === 'year')?.value;
+    const m = parts.find(p => p.type === 'month')?.value;
+    const day = parts.find(p => p.type === 'day')?.value;
+    const h = parts.find(p => p.type === 'hour')?.value;
+    const min = parts.find(p => p.type === 'minute')?.value;
+    const s = parts.find(p => p.type === 'second')?.value;
+    return `${y}-${m}-${day}T${h}:${min}:${s}`;
+  };
+  const getLocalDateStr = (d: Date) => {
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Singapore',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(d);
+    const y = parts.find(p => p.type === 'year')?.value;
+    const m = parts.find(p => p.type === 'month')?.value;
+    const day = parts.find(p => p.type === 'day')?.value;
+    return `${y}-${m}-${day}`;
+  };
 
   const formatDateTime = (date: Date) => {
     const formatter = new Intl.DateTimeFormat('en-GB', {
@@ -686,6 +766,32 @@ const [artistSearch, setArtistSearch] = useState("");
   const totalClosing = computeTotal(closingCounts);
 
   useEffect(() => {
+    const initDate = async () => {
+      try {
+        const savedBusinessDate = await require("@react-native-async-storage/async-storage").default.getItem("selected_business_date");
+        let activeDateStr = savedBusinessDate;
+        
+        try {
+          const res = await fetch(`${API_URL}/api/settlement/active-day`);
+          const data = await res.json();
+          if (data.success && data.active && data.startDate) {
+            activeDateStr = data.startDate;
+          }
+        } catch (err) {
+          console.warn("Failed to fetch active business day inside Settlement:", err);
+        }
+
+        if (activeDateStr) {
+          const activeFrom = new Date(`${activeDateStr}T00:00:00+08:00`);
+          const activeTo = new Date(`${activeDateStr}T23:59:59+08:00`);
+          setFromDate(activeFrom);
+          setToDate(activeTo);
+        }
+      } catch (e) {
+        console.error("Failed to load business date:", e);
+      }
+    };
+    initDate();
     loadTerminals();
     loadDishes();
     useGeneralSettingsStore.getState().fetchSettings();
@@ -803,11 +909,7 @@ const loadDishes = async () => {
     return val.toFixed(2);
   };
 
-  const netSales =
-    (parseFloat(totalSales.SubTotal) || 0) +
-    (parseFloat(totalSales.ServiceCharge) || 0) +
-    (parseFloat(totalSales.TotalTax) || 0) -
-    (parseFloat(totalSales.DiscountAmount) || 0);
+  const netSales = parseFloat(totalSales.NetTotal) || 0;
 
   const salesTotal = sales.reduce((sum, s) => sum + (parseFloat(s.Amount) || 0), 0);
   const paymentsTotal = payments.reduce((sum, p) => sum + (parseFloat(p.Amount) || 0), 0);

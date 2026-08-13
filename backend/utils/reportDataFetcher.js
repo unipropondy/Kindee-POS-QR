@@ -247,13 +247,13 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         SUM(CAST(ISNULL(rod.TotalDetailLineAmount, 0) AS decimal(18, 2))) AS totalAmount
       FROM RestaurantOrderDetail rod
       INNER JOIN (
-        SELECT OrderId, RestaurantBillId, InvoiceDate 
+        SELECT OrderId, RestaurantBillId, InvoiceDate, start_date 
         FROM (
-          SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn, ROW_NUMBER() OVER (PARTITION BY OrderId ORDER BY CreatedOn DESC) as rn
+          SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn, start_date, ROW_NUMBER() OVER (PARTITION BY OrderId ORDER BY CreatedOn DESC) as rn
           FROM (
-            SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn FROM RestaurantInvoice WHERE StatusCode = 5
+            SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn, start_date FROM RestaurantInvoice WHERE StatusCode = 5
             UNION ALL
-            SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn FROM RestaurantInvoicecur WHERE StatusCode = 5
+            SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn, start_date FROM RestaurantInvoicecur WHERE StatusCode = 5
           ) CombinedInvoices
         ) DeduplicatedInvoices
         WHERE rn = 1
@@ -261,7 +261,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
       LEFT JOIN DishMaster d ON rod.DishId = d.DishId
       LEFT JOIN DishGroupMaster dg ON d.DishGroupId = dg.DishGroupId
       LEFT JOIN CategoryMaster cm ON dg.CategoryId = cm.CategoryId
-      WHERE ri.InvoiceDate >= ${sgtStart} AND ri.InvoiceDate < ${sgtEnd}
+      WHERE ri.start_date >= CAST('${startDateStr}' AS DATE) AND ri.start_date <= CAST('${endDateStr}' AS DATE)
         AND NOT EXISTS (
           SELECT 1 FROM SettlementHeader sh_dup 
           WHERE sh_dup.SettlementID = ri.RestaurantBillId
@@ -279,7 +279,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
       LEFT JOIN DishMaster d ON rod.DishId = d.DishId
       LEFT JOIN DishGroupMaster dg ON d.DishGroupId = dg.DishGroupId
       LEFT JOIN CategoryMaster cm ON dg.CategoryId = cm.CategoryId
-      WHERE ro.OrderDateTime >= ${sgtStart} AND ro.OrderDateTime < ${sgtEnd}
+      WHERE ro.start_date >= CAST('${startDateStr}' AS DATE) AND ro.start_date <= CAST('${endDateStr}' AS DATE)
         AND ISNULL(ro.StatusCode, 0) = 3
         AND NOT EXISTS (
           SELECT 1 FROM SettlementHeader sh_dup 
@@ -330,13 +330,13 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         SUM(CAST(ISNULL(rod.TotalDetailLineAmount, 0) AS decimal(18, 2))) AS totalAmount
       FROM RestaurantOrderDetail rod
       INNER JOIN (
-        SELECT OrderId, RestaurantBillId, InvoiceDate 
+        SELECT OrderId, RestaurantBillId, InvoiceDate, start_date 
         FROM (
-          SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn, ROW_NUMBER() OVER (PARTITION BY OrderId ORDER BY CreatedOn DESC) as rn
+          SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn, start_date, ROW_NUMBER() OVER (PARTITION BY OrderId ORDER BY CreatedOn DESC) as rn
           FROM (
-            SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn FROM RestaurantInvoice WHERE StatusCode = 5
+            SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn, start_date FROM RestaurantInvoice WHERE StatusCode = 5
             UNION ALL
-            SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn FROM RestaurantInvoicecur WHERE StatusCode = 5
+            SELECT OrderId, RestaurantBillId, InvoiceDate, CreatedOn, start_date FROM RestaurantInvoicecur WHERE StatusCode = 5
           ) CombinedInvoices
         ) DeduplicatedInvoices
         WHERE rn = 1
@@ -344,7 +344,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
       LEFT JOIN DishMaster d ON rod.DishId = d.DishId
       LEFT JOIN DishGroupMaster dg ON d.DishGroupId = dg.DishGroupId
       LEFT JOIN CategoryMaster cm ON dg.CategoryId = cm.CategoryId
-      WHERE ri.InvoiceDate >= ${sgtStart} AND ri.InvoiceDate < ${sgtEnd}
+      WHERE ri.start_date >= CAST('${startDateStr}' AS DATE) AND ri.start_date <= CAST('${endDateStr}' AS DATE)
         AND NOT EXISTS (
           SELECT 1 FROM SettlementHeader sh_dup 
           WHERE sh_dup.SettlementID = ri.RestaurantBillId
@@ -365,7 +365,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
       LEFT JOIN DishMaster d ON rod.DishId = d.DishId
       LEFT JOIN DishGroupMaster dg ON d.DishGroupId = dg.DishGroupId
       LEFT JOIN CategoryMaster cm ON dg.CategoryId = cm.CategoryId
-      WHERE ro.OrderDateTime >= ${sgtStart} AND ro.OrderDateTime < ${sgtEnd}
+      WHERE ro.start_date >= CAST('${startDateStr}' AS DATE) AND ro.start_date <= CAST('${endDateStr}' AS DATE)
         AND ISNULL(ro.StatusCode, 0) = 3
         AND NOT EXISTS (
           SELECT 1 FROM SettlementHeader sh_dup 
