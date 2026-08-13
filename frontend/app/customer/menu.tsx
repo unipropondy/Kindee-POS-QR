@@ -14,6 +14,7 @@ import {
   Platform,
   Modal,
   ScrollView,
+  RefreshControl,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Theme } from "../../constants/theme";
@@ -388,15 +389,22 @@ const LogoutButtonWeb = ({ onConfirm }: { onConfirm: () => void }) => {
 
 export default function CustomerMenuScreen() {
   const router = useRouter();
-  const { kitchens, allDishes, fetchMenu, fetchGroups, modifierCache, isLoading } = useMenuStore();
+  const { kitchens, allDishes, fetchMenu, fetchGroups, modifierCache, isLoading, forceRefreshMenu } = useMenuStore();
   const { carts, currentContextId, addToCartGlobal } = useCartStore();
   const orderContext = useOrderContextStore((state) => state.currentOrder);
 
+  const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedKitchenId, setSelectedKitchenId] = useState<string | null>(null);
   const [dishGroups, setDishGroups] = useState<any[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await forceRefreshMenu();
+    setRefreshing(false);
+  };
   const [isSessionClosed, setIsSessionClosed] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [userInfo, setUserInfo] = useState<{ UserName: string; FullName: string; Phone: string; Email?: string; PromoCode?: string; PromoAmount?: number } | null>(null);
@@ -855,6 +863,13 @@ export default function CustomerMenuScreen() {
           data={filteredDishes}
           keyExtractor={(item) => item.DishId || item.id}
           contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Theme.primary}
+            />
+          }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Ionicons name="restaurant-outline" size={48} color="#94A3B8" />
