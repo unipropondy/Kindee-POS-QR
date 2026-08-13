@@ -1701,15 +1701,15 @@ class UniversalPrinter {
     // 📏 80mm standard is ~48 characters
     let text = "[C]================================================\n";
     if (isCheckout) {
-      text += "[C]<font size='big-2'><B>CHECKOUT BILL</B></font>\n";
+      text += "[C]<font size='big'><B>CHECKOUT BILL</B></font>\n";
       text += "[C]<B>PAYMENT PENDING</B>\n";
     } else {
-      text += "[C]<font size='big-2'><B>PAYMENT RECEIPT</B></font>\n";
+      text += "[C]<font size='big'><B>PAYMENT RECEIPT</B></font>\n";
     }
     text += "[C]================================================\n";
 
     // Header Info
-    text += `[C]<font size='big-2'><B>${(company.name || "YOUR STORE").toUpperCase()}</B></font>\n`;
+    text += `[C]<font size='big'><B>${(company.name || "YOUR STORE").toUpperCase()}</B></font>\n`;
     if (company.address) text += `[C]${company.address}\n`;
     if (company.phone) text += `[C]Tel: ${company.phone}\n`;
     if (company.email) text += `[C]Email: ${company.email}\n`;
@@ -1721,7 +1721,7 @@ class UniversalPrinter {
 
     text += `[L]Bill No: ${saleData.invoiceNumber || saleData.id || ""}\n`;
     if (saleData.tableNo) {
-      text += `[L]<font size=\'big-2\'><B>TABLE: ${saleData.tableNo}</B></font>\n`;
+      text += `[L]<font size=\'big\'><B>TABLE: ${saleData.tableNo}</B></font>\n`;
     }
     const dateFormatted = formatToSingaporeDate(saleDate, { day: '2-digit', month: '2-digit', year: 'numeric' });
     text += `[L]Date: ${dateFormatted} ${formatToSingaporeTime(saleDate)}\n`;
@@ -1990,7 +1990,7 @@ class UniversalPrinter {
       }
     }
 
-    text += `[R]<font size=\'big-2\'><B>TOTAL: ${symbol}${finalTotal.toFixed(2)}</B></font>\n`;
+    text += `[R]<font size=\'big\'><B>TOTAL: ${symbol}${finalTotal.toFixed(2)}</B></font>\n`;
     text += "[C]================================================\n";
 
     // 🏆 Print Reward point transaction stats
