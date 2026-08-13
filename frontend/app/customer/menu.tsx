@@ -701,10 +701,14 @@ export default function CustomerMenuScreen() {
 
   const filteredDishes = allDishes.filter((dish: any) => {
     // Hide if unpublished on Dish, Category, or Group level for QR only
+    const isPub = dish.IsPublished !== undefined ? dish.IsPublished : dish.isPublished;
+    const catPub = dish.CategoryPublished !== undefined ? dish.CategoryPublished : dish.categoryPublished;
+    const grpPub = dish.GroupPublished !== undefined ? dish.GroupPublished : dish.groupPublished;
+
     if (
-      dish.IsPublished === 1 || dish.IsPublished === true || dish.IsPublished === '1' ||
-      dish.CategoryPublished === 1 || dish.CategoryPublished === true || dish.CategoryPublished === '1' ||
-      dish.GroupPublished === 1 || dish.GroupPublished === true || dish.GroupPublished === '1'
+      isPub == 1 || isPub === true || String(isPub) === '1' ||
+      catPub == 1 || catPub === true || String(catPub) === '1' ||
+      grpPub == 1 || grpPub === true || String(grpPub) === '1'
     ) {
       return false;
     }
