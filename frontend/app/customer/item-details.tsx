@@ -104,12 +104,10 @@ export default function CustomerItemDetailsScreen() {
     const current = selections[groupId] || [];
     if (isMulti) {
       if (current.includes(optionDishId)) {
-        if (current.length > minSel) {
-          setSelections({
-            ...selections,
-            [groupId]: current.filter(id => id !== optionDishId),
-          });
-        }
+        setSelections({
+          ...selections,
+          [groupId]: current.filter(id => id !== optionDishId),
+        });
       } else {
         if (current.length < maxSel) {
           setSelections({
