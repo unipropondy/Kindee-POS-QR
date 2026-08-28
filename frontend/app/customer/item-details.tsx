@@ -114,6 +114,12 @@ export default function CustomerItemDetailsScreen() {
             ...selections,
             [groupId]: [...current, optionDishId],
           });
+        } else {
+          // Reached limit, automatically unselect the oldest option (FIFO) and select the new one
+          setSelections({
+            ...selections,
+            [groupId]: [...current.slice(1), optionDishId],
+          });
         }
       }
     } else {
