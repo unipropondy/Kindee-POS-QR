@@ -1035,6 +1035,8 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
   const enableCheckoutBill = useGeneralSettingsStore((s: any) => s.settings.enableCheckoutBill);
   const enableCheckoutFlow = useGeneralSettingsStore((s: any) => s.settings.enableCheckoutFlow !== undefined ? s.settings.enableCheckoutFlow : true);
   const enableDirectProcessToPay = useGeneralSettingsStore((s: any) => s.settings.enableDirectProcessToPay !== undefined ? s.settings.enableDirectProcessToPay : false);
+  const enableDirectPaymentToProcess = useGeneralSettingsStore((s: any) => s.settings.enableDirectPaymentToProcess !== undefined ? s.settings.enableDirectPaymentToProcess : false);
+  const enableSkipSummaryScreen = useGeneralSettingsStore((s: any) => s.settings.enableSkipSummaryScreen !== undefined ? s.settings.enableSkipSummaryScreen : false);
 
   const unsentCount = useMemo(() => {
     return cart.filter((i: any) => !isItemSent(i)).length;
@@ -1194,8 +1196,11 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
 
   const takeawayCharges = settings.takeawayCharges || 0;
 
-  const { grossTotal, totalDiscount, scEligibleSubtotal, takeawayChargeAmt, takeawayQty } = useMemo(() => {
-    return displayItems.reduce(
+  const { grossTotal, totalDiscount, scEligibleSubtotal, takeawayChargeAmt, takeawayQty, hasMixedTWCharges, singleTWRate } = useMemo(() => {
+    let firstRate: number | null = null;
+    let mixed = false;
+
+    const reduced = displayItems.reduce(
       (acc, item) => {
         const isVoided = "status" in item && item.status === "VOIDED";
         if (isVoided) return acc;
@@ -1218,7 +1223,19 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
         const itemSubtotal = baseTotal - itemDiscount;
         const isTakeawayItem = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway;
         const isSC = !isTakeawayItem && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true);
-        const itemTWCharge = isTakeawayItem ? item.qty * takeawayCharges : 0;
+        
+        let itemTWCharge = 0;
+        if (isTakeawayItem) {
+          const dishSpecificTW = Number(item.takeawayCharge ?? item.TakeawayCharge ?? 0);
+          const effectiveTWRate = dishSpecificTW > 0 ? dishSpecificTW : takeawayCharges;
+          itemTWCharge = item.qty * effectiveTWRate;
+
+          if (firstRate === null) {
+            firstRate = effectiveTWRate;
+          } else if (firstRate !== effectiveTWRate) {
+            mixed = true;
+          }
+        }
 
         return {
           grossTotal: acc.grossTotal + baseTotal,
@@ -1230,6 +1247,12 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
       },
       { grossTotal: 0, totalDiscount: 0, scEligibleSubtotal: 0, takeawayChargeAmt: 0, takeawayQty: 0 },
     );
+
+    return {
+      ...reduced,
+      hasMixedTWCharges: mixed,
+      singleTWRate: firstRate !== null ? firstRate : takeawayCharges
+    };
   }, [displayItems, takeawayCharges]);
 
   const subtotal = grossTotal - totalDiscount;
@@ -1370,6 +1393,22 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
     setIsCheckingOut(true);
 
     try {
+      // Instantly update local table status to BILL_REQUESTED so color changes immediately!
+      updateTableStatus(
+        tableId,
+        orderContext.section || "TAKEAWAY",
+        orderContext.orderType === "DINE_IN"
+          ? orderContext.tableNo!
+          : orderContext.takeawayNo!,
+        activeOrder?.orderId || currentTableOrderId || "NEW",
+        "BILL_REQUESTED",
+        new Date().toISOString(),
+        undefined,
+        payableAmount,
+      );
+    } catch (_) {}
+
+    try {
       // 🚀 TURBO PRINT: Start printing immediately
       let displayOrderId = activeOrder?.orderId || currentTableOrderId || "NEW";
       if (
@@ -1413,32 +1452,67 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
         }
       })();
 
-      // 🚀 VERIFIED CHECKOUT: Wait for server response
-      const res = await useCartStore.getState().checkoutOrder(tableId);
+      if (enableCheckoutFlow !== false) {
+        // 🚀 INSTANT REDIRECT: Go back to Floor Plan immediately for hyper-speed UX
+        useOrderContextStore.getState().clearOrderContext();
+        router.replace("/(tabs)/category");
 
-      if (res && res.success) {
-        // 🚀 SYNC: Refresh kitchen and global status stores
-        useActiveOrdersStore.getState().fetchActiveKitchenOrders();
+        // Fire API call and sync in background
+        (async () => {
+          try {
+            const res = await useCartStore.getState().checkoutOrder(tableId);
+            if (res && res.success) {
+              useActiveOrdersStore.getState().fetchActiveKitchenOrders().catch(() => {});
+            }
+          } catch (e) {
+            console.error("Background checkout failed:", e);
+          }
+        })();
 
         showToast({
           type: "success",
           message: "Success",
-          subtitle: enableCheckoutBill ? "Order finalized & Printing..." : "Checkout completed successfully. Bill printing is disabled.",
-          duration: 1500,
+          subtitle: enableCheckoutBill ? "Order finalized & Printing..." : "Checkout completed successfully.",
+          duration: 1000,
         });
-
-        if (enableCheckoutFlow !== false) {
-          router.replace(`/(tabs)/category?section=${orderContext.section}`);
-        } else {
-          router.push("/payment");
-        }
-      } else {
-        showToast({
-          type: "error",
-          message: "Checkout Failed",
-          subtitle: "Please try again or check connection.",
-        });
+        setIsCheckingOut(false);
+        return;
       }
+
+      // 🚀 INSTANT REDIRECT TO PAYMENT: Go to payment screen immediately for hyper-speed UX
+      if (enableSkipSummaryScreen) {
+        router.push("/payment");
+      } else {
+        router.push("/summary");
+      }
+
+      // Fire API call and sync in background
+      (async () => {
+        try {
+          const res = await useCartStore.getState().checkoutOrder(tableId);
+          if (res && res.success) {
+            useActiveOrdersStore.getState().fetchActiveKitchenOrders().catch(() => {});
+            // Broadcast new order to sync KDS screens instantly via sockets
+            socket.emit("new_order", { 
+              orderId: currentOrderId, 
+              context: orderContext, 
+              items: cart.filter((i: any) => i.status !== "VOIDED" && i.statusCode !== 0),
+              createdAt: Date.now() 
+            });
+          }
+        } catch (e) {
+          console.error("Background checkout failed:", e);
+        }
+      })();
+
+      showToast({
+        type: "success",
+        message: "Success",
+        subtitle: enableCheckoutBill ? "Order finalized & Printing..." : "Checkout completed successfully.",
+        duration: 1000,
+      });
+      setIsCheckingOut(false);
+      return;
     } catch (err) {
       console.error("Checkout flow error:", err);
       showToast({
@@ -1511,8 +1585,10 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
       );
     })();
 
+    const shouldSkipRedirect = skipRedirect || enableDirectPaymentToProcess;
+
     // 3. Close Sidebar & Redirect instantly
-    if (!skipRedirect) {
+    if (!shouldSkipRedirect) {
       router.replace(`/(tabs)/category?section=${orderContext.section}`);
     }
 
@@ -1790,7 +1866,7 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
               {takeawayChargeAmt > 0 && (
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>
-                    TW Charges ({currencySymbol}{takeawayCharges.toFixed(2)} * {takeawayQty})
+                    TW Charges
                   </Text>
                   <Text style={styles.summaryValue}>
                     {currencySymbol}
@@ -1833,12 +1909,129 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
 
             <View style={styles.actions}>
               {(() => {
-                const isFlow2 = enableDirectProcessToPay === true && enableCheckoutFlow === false;
+                const isFlow2 = (enableDirectProcessToPay === true || enableDirectPaymentToProcess === true) && enableCheckoutFlow === false;
                 const isDineIn = orderContext.orderType === "DINE_IN";
 
                 if (isFlow2) {
                   if (isDineIn) {
                     if (unsentCount > 0) {
+                      if (enableDirectPaymentToProcess === true) {
+                        return (
+                          <>
+                            {/* Hold button (Blue, 50%) */}
+                            <TouchableOpacity
+                              style={[styles.holdBtn, { flex: 1, backgroundColor: "#2563EB" }]}
+                              onPress={async () => {
+                                useCartStore.getState().cancelPendingSync();
+                                const targetOrderId = activeOrder?.orderId || "HOLD";
+                                const tableId = orderContext.tableId;
+
+                                // 🚀 OPTIMISTIC UI: Change color instantly
+                                if (tableId) {
+                                  updateTableStatus(
+                                    tableId,
+                                    orderContext.section!,
+                                    orderContext.tableNo!,
+                                    targetOrderId,
+                                    "HOLD",
+                                    Date.now(),
+                                    undefined,
+                                    payableAmount,
+                                  );
+                                }
+
+                                // 🚀 Background Sync
+                                if (tableId) {
+                                  (async () => {
+                                    try {
+                                      await fetch(`${API_URL}/api/orders/save-cart`, {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          tableId: tableId,
+                                          orderId: targetOrderId,
+                                          items: cart,
+                                          skipTableStatusSync: true,
+                                        }),
+                                      });
+
+                                      const holdRes = await fetch(
+                                        `${API_URL}/api/orders/hold`,
+                                        {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ tableId: tableId }),
+                                        },
+                                      );
+                                      const holdData = await holdRes.json();
+
+                                      if (holdData.success) {
+                                        const serverStartTime =
+                                          holdData.StartTime || holdData.startTime;
+                                        updateTableStatus(
+                                          tableId,
+                                          orderContext.section!,
+                                          orderContext.tableNo!,
+                                          targetOrderId,
+                                          "HOLD",
+                                          serverStartTime,
+                                          undefined,
+                                          payableAmount,
+                                        );
+                                      }
+                                    } catch (err) {
+                                      console.error("Hold sync error:", err);
+                                    }
+                                  })();
+                                }
+
+                                holdOrder(targetOrderId, cart, orderContext);
+                                router.replace(
+                                  `/(tabs)/category?section=${orderContext.section}`,
+                                );
+                              }}
+                            >
+                              <Ionicons
+                                name="pause-circle-outline"
+                                size={iconSize}
+                                color="#fff"
+                              />
+                              <Text style={styles.btnText}>Hold Cart</Text>
+                            </TouchableOpacity>
+
+                            {/* Send to Kitchen button (Green, 50%) */}
+                            <TouchableOpacity
+                              disabled={isCheckingOut}
+                              style={[
+                                styles.proceedBtn,
+                                { flex: 1, backgroundColor: "#10B981" },
+                                isCheckingOut && { opacity: 0.6 }
+                              ]}
+                              onPress={async () => {
+                                if (isCheckingOut) return;
+                                setIsCheckingOut(true);
+                                try {
+                                  await handleSendOrder(true);
+                                } catch (err) {
+                                  console.error("KOT send error:", err);
+                                } finally {
+                                  setIsCheckingOut(false);
+                                }
+                              }}
+                            >
+                              {isCheckingOut ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                              ) : (
+                                <>
+                                  <Ionicons name="send" size={iconSize} color="#fff" />
+                                  <Text style={styles.btnText}>Send to Kitchen</Text>
+                                </>
+                              )}
+                            </TouchableOpacity>
+                          </>
+                        );
+                      }
+
                       // Dine-in Flow 2: 3-button layout when unsentCount > 0
                       return (
                         <>
@@ -1923,67 +2116,66 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                             />
                           </TouchableOpacity>
 
-                          {/* KOT button (Indigo, text 'KOT', 50px) */}
-                          <TouchableOpacity
-                            disabled={isCheckingOut}
-                            style={[
-                              styles.compactIconBtn,
-                              { backgroundColor: "#4F46E5" },
-                              isCheckingOut && { opacity: 0.6 }
-                            ]}
-                            onPress={async () => {
-                              if (isCheckingOut) return;
-                              setIsCheckingOut(true);
-                              try {
-                                await handleSendOrder(true);
-                              } catch (err) {
-                                console.error("KOT send error:", err);
-                              } finally {
-                                setIsCheckingOut(false);
-                              }
-                            }}
-                          >
-                            {isCheckingOut ? (
-                              <ActivityIndicator size="small" color="#fff" />
-                            ) : (
-                              <Text style={{ color: "#fff", fontFamily: Fonts.black, fontSize: 13 }}>KOT</Text>
-                            )}
-                          </TouchableOpacity>
-
                           {/* Pay button (Green, flex-grow) */}
                           <TouchableOpacity
                             disabled={isCheckingOut}
                             style={[
                               styles.proceedBtn,
-                              { backgroundColor: "#10B981" },
+                              { flex: 1, backgroundColor: "#10B981" },
                               isCheckingOut && { opacity: 0.6 }
                             ]}
                             onPress={async () => {
                               if (isCheckingOut) return;
-                              useCartStore.getState().cancelPendingSync();
                               const tableId = orderContext.tableId;
                               if (!tableId) return;
-
                               setIsCheckingOut(true);
                               try {
-                                const targetOrderId = activeOrder?.orderId || currentTableOrderId || "NEW";
-                                const officialOrderId = await saveCartHelper(tableId, targetOrderId, true);
+                                // 🚀 Auto-trigger sending to kitchen/printing KOT in background
+                                await handleSendOrder(true);
+                                
+                                // 🚀 Print checkout bill if Checkout Bill setting is ON
+                                if (enableCheckoutBill) {
+                                  try {
+                                    let displayOrderId = activeOrder?.orderId || currentTableOrderId || "NEW";
+                                    if (
+                                      displayOrderId === "NEW" ||
+                                      displayOrderId === "PENDING" ||
+                                      displayOrderId === "#NEW"
+                                    ) {
+                                      const timestamp = new Date().getTime().toString().slice(-6);
+                                      displayOrderId = `ORD-${new Date().toISOString().split("T")[0].replace(/-/g, "")}-${timestamp}`;
+                                    }
+                                    const printData = {
+                                      id: displayOrderId,
+                                      invoiceNumber: displayOrderId,
+                                      date: new Date(),
+                                      items: cart.filter(
+                                        (i: any) => i.status !== "VOIDED" && i.statusCode !== 0,
+                                      ),
+                                      total: payableAmount,
+                                      totalAmount: payableAmount,
+                                      subTotal: grossTotal,
+                                      taxAmount: taxAmount,
+                                      discountAmount: 0,
+                                      serviceCharge: serviceChargeAmt,
+                                      tableNo: orderContext.tableNo,
+                                      section: orderContext.section,
+                                      serverName: user?.userName || "Staff",
+                                      paymentMethod: "CASH",
+                                    };
+                                    UniversalPrinter.printCheckoutBill(printData, user?.userId);
+                                  } catch (e) {
+                                    console.error("Direct Pay Print Error:", e);
+                                  }
+                                }
 
-                                updateTableStatus(
-                                  tableId,
-                                  orderContext.section!,
-                                  orderContext.tableNo!,
-                                  officialOrderId || targetOrderId,
-                                  "SENT",
-                                  new Date().toISOString(),
-                                  undefined,
-                                  payableAmount,
-                                );
-
-                                await useCartStore.getState().fetchCartFromDB(tableId);
-                                await useActiveOrdersStore.getState().fetchActiveKitchenOrders();
-
-                                router.push("/summary");
+                                // Navigate immediately for fast UX, refresh cart data in background
+                                router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
+                                // Fire-and-forget background refresh
+                                Promise.all([
+                                  useCartStore.getState().fetchCartFromDB(tableId),
+                                  useActiveOrdersStore.getState().fetchActiveKitchenOrders(),
+                                ]).catch(err => console.warn("Background refresh error:", err));
                               } catch (err) {
                                 console.error("Direct process to pay error:", err);
                                 showToast({ type: "error", message: "Error", subtitle: "Failed to process payment." });
@@ -1997,7 +2189,7 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                             ) : (
                               <>
                                 <Ionicons name="card-outline" size={iconSize} color="#fff" />
-                                <Text style={styles.btnText}>Pay</Text>
+                                <Text style={styles.btnText}>Proceed to Pay</Text>
                               </>
                             )}
                           </TouchableOpacity>
@@ -2007,36 +2199,56 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                       // Dine-in Flow 2: Only show Pay button when unsentCount === 0
                       return (
                         <TouchableOpacity
+                          disabled={isCheckingOut}
                           style={[
                             styles.proceedBtn,
-                            { flex: 1, backgroundColor: "#10B981" },
+                            { flex: 1, backgroundColor: enableDirectPaymentToProcess ? Theme.primary : "#10B981" },
+                            isCheckingOut && { opacity: 0.6 }
                           ]}
                           onPress={() => {
-                            router.push("/summary");
+                            if (enableDirectPaymentToProcess) {
+                              handleCheckout();
+                            } else {
+                              router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
+                            }
                           }}
                         >
-                          <Ionicons name="card-outline" size={iconSize} color="#fff" />
-                          <Text style={styles.btnText}>Pay</Text>
+                          {isCheckingOut ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="card-outline" size={iconSize} color="#fff" />
+                              <Text style={styles.btnText}>Proceed to Pay</Text>
+                            </>
+                          )}
                         </TouchableOpacity>
                       );
                     } else if (currentTableStatus === "BILL_REQUESTED") {
                       // Dine-in Flow 2: 1-button layout when status is BILL_REQUESTED
                       return (
                         <TouchableOpacity
+                          disabled={isCheckingOut}
                           style={[
                             styles.proceedBtn,
-                            { flex: 1, backgroundColor: "#10B981" },
+                            { flex: 1, backgroundColor: enableDirectPaymentToProcess ? Theme.primary : "#10B981" },
+                            isCheckingOut && { opacity: 0.6 }
                           ]}
                           onPress={() => {
-                            router.push("/summary");
+                            if (enableDirectPaymentToProcess) {
+                              handleCheckout();
+                            } else {
+                              router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
+                            }
                           }}
                         >
-                          <Ionicons
-                            name="card-outline"
-                            size={iconSize}
-                            color="#fff"
-                          />
-                          <Text style={styles.btnText}>Proceed to Pay</Text>
+                          {isCheckingOut ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="card-outline" size={iconSize} color="#fff" />
+                              <Text style={styles.btnText}>Proceed to Pay</Text>
+                            </>
+                          )}
                         </TouchableOpacity>
                       );
                     } else {
@@ -2048,7 +2260,7 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                             { flex: 1, backgroundColor: "#10B981" },
                           ]}
                           onPress={() => {
-                            router.push("/summary");
+                            router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
                           }}
                         >
                           <Ionicons
@@ -2065,33 +2277,6 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                     if (unsentCount > 0) {
                       return (
                         <>
-                          {/* KOT button (Indigo, text 'KOT', 50px) */}
-                          <TouchableOpacity
-                            disabled={isCheckingOut}
-                            style={[
-                              styles.compactIconBtn,
-                              { backgroundColor: "#4F46E5", marginRight: 8 },
-                              isCheckingOut && { opacity: 0.6 }
-                            ]}
-                            onPress={async () => {
-                              if (isCheckingOut) return;
-                              setIsCheckingOut(true);
-                              try {
-                                await handleSendOrder(true);
-                              } catch (err) {
-                                console.error("KOT send error:", err);
-                              } finally {
-                                setIsCheckingOut(false);
-                              }
-                            }}
-                          >
-                            {isCheckingOut ? (
-                              <ActivityIndicator size="small" color="#fff" />
-                            ) : (
-                              <Text style={{ color: "#fff", fontFamily: Fonts.black, fontSize: 13 }}>KOT</Text>
-                            )}
-                          </TouchableOpacity>
-
                           {/* Proceed to Pay (Green, flex-grow) */}
                           <TouchableOpacity
                             disabled={isCheckingOut}
@@ -2102,30 +2287,54 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                             ]}
                             onPress={async () => {
                               if (isCheckingOut) return;
-                              useCartStore.getState().cancelPendingSync();
                               const tableId = orderContext.tableId;
                               if (!tableId) return;
 
                               setIsCheckingOut(true);
                               try {
-                                const targetOrderId = activeOrder?.orderId || currentTableOrderId || "NEW";
-                                const officialOrderId = await saveCartHelper(tableId, targetOrderId, true);
+                                // 🚀 Auto-trigger sending to kitchen/printing KOT in background
+                                await handleSendOrder(true);
 
-                                updateTableStatus(
-                                  tableId,
-                                  orderContext.section || "TAKEAWAY",
-                                  orderContext.takeawayNo!,
-                                  officialOrderId || targetOrderId,
-                                  "SENT",
-                                  new Date().toISOString(),
-                                  undefined,
-                                  payableAmount,
-                                );
+                                // 🚀 Print checkout bill if Checkout Bill setting is ON
+                                if (enableCheckoutBill) {
+                                  try {
+                                    let displayOrderId = activeOrder?.orderId || currentTableOrderId || "NEW";
+                                    if (
+                                      displayOrderId === "NEW" ||
+                                      displayOrderId === "PENDING" ||
+                                      displayOrderId === "#NEW"
+                                    ) {
+                                      const timestamp = new Date().getTime().toString().slice(-6);
+                                      displayOrderId = `ORD-${new Date().toISOString().split("T")[0].replace(/-/g, "")}-${timestamp}`;
+                                    }
+                                    const printData = {
+                                      id: displayOrderId,
+                                      invoiceNumber: displayOrderId,
+                                      date: new Date(),
+                                      items: cart.filter(
+                                        (i: any) => i.status !== "VOIDED" && i.statusCode !== 0,
+                                      ),
+                                      total: payableAmount,
+                                      totalAmount: payableAmount,
+                                      subTotal: grossTotal,
+                                      taxAmount: taxAmount,
+                                      discountAmount: 0,
+                                      serviceCharge: serviceChargeAmt,
+                                      tableNo: orderContext.tableNo,
+                                      section: orderContext.section,
+                                      serverName: user?.userName || "Staff",
+                                      paymentMethod: "CASH",
+                                    };
+                                    UniversalPrinter.printCheckoutBill(printData, user?.userId);
+                                  } catch (e) {
+                                    console.error("Direct Pay Print Error:", e);
+                                  }
+                                }
 
                                 await useCartStore.getState().fetchCartFromDB(tableId);
                                 await useActiveOrdersStore.getState().fetchActiveKitchenOrders();
 
-                                router.push("/summary");
+                                router.push(enableDirectPaymentToProcess || enableSkipSummaryScreen ? "/payment" : "/summary");
                               } catch (err) {
                                 console.error("Takeaway Direct process to pay error:", err);
                                 showToast({ type: "error", message: "Error", subtitle: "Failed to process payment." });
@@ -2148,16 +2357,28 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                     } else {
                       return (
                         <TouchableOpacity
+                          disabled={isCheckingOut}
                           style={[
                             styles.proceedBtn,
-                            { flex: 1, backgroundColor: "#10B981" },
+                            { flex: 1, backgroundColor: enableDirectPaymentToProcess ? Theme.primary : "#10B981" },
+                            isCheckingOut && { opacity: 0.6 }
                           ]}
                           onPress={() => {
-                            router.push("/summary");
+                            if (enableDirectPaymentToProcess) {
+                              handleCheckout();
+                            } else {
+                              router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
+                            }
                           }}
                         >
-                          <Ionicons name="card-outline" size={iconSize} color="#fff" />
-                          <Text style={styles.btnText}>Proceed to Pay</Text>
+                          {isCheckingOut ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="card-outline" size={iconSize} color="#fff" />
+                              <Text style={styles.btnText}>Proceed to Pay</Text>
+                            </>
+                          )}
                         </TouchableOpacity>
                       );
                     }
@@ -2287,7 +2508,7 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                               await useCartStore.getState().fetchCartFromDB(tableId);
                               await useActiveOrdersStore.getState().fetchActiveKitchenOrders();
 
-                              router.push("/summary");
+                              router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
                             } catch (err) {
                               console.error("Direct process to pay error:", err);
                               showToast({ type: "error", message: "Error", subtitle: "Failed to process payment." });
@@ -2387,27 +2608,38 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                             <Ionicons name="receipt-outline" size={iconSize} color="#fff" />
                           )}
                           <Text style={styles.btnText}>
-                            {isCheckingOut ? "Checking out..." : "Checkout"}
+                            {isCheckingOut ? "Checking out..." : (enableDirectPaymentToProcess ? "Proceed to Pay" : "Checkout")}
                           </Text>
                         </TouchableOpacity>
                       )}
 
-                      {enableCheckoutFlow === false && enableDirectProcessToPay === true && (
+                      {enableCheckoutFlow === false && (enableDirectProcessToPay === true || enableDirectPaymentToProcess === true) && (
                         <TouchableOpacity
                           disabled={isCheckingOut}
                           style={[
                             styles.proceedBtn,
                             {
                               flex: 1,
-                              backgroundColor: "#10B981",
+                              backgroundColor: enableDirectPaymentToProcess ? Theme.primary : "#10B981",
                             },
+                            isCheckingOut && { opacity: 0.6 }
                           ]}
                           onPress={() => {
-                            router.push("/summary");
+                            if (enableDirectPaymentToProcess) {
+                              handleCheckout();
+                            } else {
+                              router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
+                            }
                           }}
                         >
-                          <Ionicons name="card-outline" size={iconSize} color="#fff" />
-                          <Text style={styles.btnText}>Process to Pay</Text>
+                          {isCheckingOut ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="card-outline" size={iconSize} color="#fff" />
+                              <Text style={styles.btnText}>Proceed to Pay</Text>
+                            </>
+                          )}
                         </TouchableOpacity>
                       )}
 
@@ -2421,7 +2653,7 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                             },
                           ]}
                           onPress={() => {
-                            router.push("/summary");
+                            router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
                           }}
                         >
                           <Ionicons name="card-outline" size={iconSize} color="#fff" />
@@ -2441,7 +2673,7 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                       ]}
                       onPress={() => {
                         if (enableCheckoutFlow !== false) {
-                          router.push("/summary");
+                          router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
                         } else {
                           router.push("/payment");
                         }
@@ -2466,7 +2698,7 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
                       ]}
                       onPress={() => {
                         if (enableCheckoutFlow !== false) {
-                          router.push("/summary");
+                          router.push(enableSkipSummaryScreen ? "/payment" : "/summary");
                         } else {
                           router.push("/payment");
                         }

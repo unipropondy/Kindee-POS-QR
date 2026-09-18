@@ -19,12 +19,16 @@ import {
   TouchableWithoutFeedback,
   useWindowDimensions,
   View,
+  Animated,
+  Easing,
 } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useToast } from "../components/Toast";
 import { Fonts } from "../constants/Fonts";
 import { Theme } from "../constants/theme";
+import WindowControls from "../components/WindowControls";
 
 import PayNowPaymentModal from "../components/payment/PayNowPaymentModal";
 import SplitPaymentComponent from "../components/payment/SplitPaymentComponent";
@@ -44,7 +48,38 @@ import { usePaymentSettingsStore } from "../stores/paymentSettingsStore";
 import { useQuickCashStore } from "../stores/quickCashStore";
 import { useServiceChargeOverrideStore } from "../stores/serviceChargeOverrideStore";
 import { useTableStatusStore } from "../stores/tableStatusStore";
+import { useTerminalPaymentStore } from "../stores/terminalPaymentStore";
+import { useTableNavigationStore } from "../stores/tableNavigationStore";
 import { CustomerDisplaySync } from "../utils/CustomerDisplaySync";
+import CashDrawerService from "../services/CashDrawerService";
+
+// --- ROTATING SYNC ICON COMPONENT ---
+const RotatingSyncIcon = ({ size = 16, color = "#3b82f6" }: { size?: number; color?: string }) => {
+  const spinValue = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    const anim = Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 1500,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [spinValue]);
+
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
+  return (
+    <Animated.View style={{ transform: [{ rotate: spin }] }}>
+      <Ionicons name="sync" size={size} color={color} />
+    </Animated.View>
+  );
+};
 
 const EMPTY_ARRAY: any[] = [];
 
@@ -114,6 +149,16 @@ const formatMoney = (symbol: string, amount: number) => {
     return `${symbol}${(amount || 0).toFixed(2)}`;
   }
 };
+
+// Define global ongoing payments map outside of the component to survive unmounting
+const ongoingPayments: Record<string, {
+  status: "idle" | "processing" | "success" | "cancelled" | "failed";
+  message: string;
+  method: string;
+  total: number;
+  promise: Promise<any>;
+  onUpdate?: (status: "idle" | "processing" | "success" | "cancelled" | "failed", message: string, result: any, error: any) => void;
+}> = {};
 
 export default function PaymentScreen() {
   const pathname = usePathname();
@@ -221,6 +266,139 @@ export default function PaymentScreen() {
   const [collectionAmount, setCollectionAmount] = useState("");
   const [processing, setProcessing] = useState(false);
   const [checkoutSessionId, setCheckoutSessionId] = useState("");
+  const cacheKey = (context?.tableId || displayOrderId || "").toString();
+
+  // --- YEAPAY TERMINAL ZUSTAND STORE SUBSCRIPTION & RECOVERY ---
+  const terminalSession = useTerminalPaymentStore(
+    (s) => context?.tableId ? s.sessions[String(context.tableId)] : undefined
+  );
+  const finalizationLockRef = React.useRef<Record<string, boolean>>({});
+  const executeFinalPaymentRef = React.useRef<any>(null);
+
+  // Reset local payment status banner when context changes or screen gains focus (unless actively processing)
+  useEffect(() => {
+    if (isFocused) {
+      const activeTblId = context?.tableId ? String(context.tableId) : undefined;
+      const activeSession = activeTblId ? useTerminalPaymentStore.getState().sessions[activeTblId] : undefined;
+      if (!activeSession || activeSession.status !== "processing") {
+        setPaymentStatus("idle");
+        setPaymentMessage("");
+        setProcessing(false);
+      }
+    }
+  }, [isFocused, context?.tableId]);
+
+  useEffect(() => {
+    // Reconstruct ongoingPayments cache if we refreshed/reloaded so the request flows correctly
+    if (terminalSession && terminalSession.status === "processing" && cacheKey && !ongoingPayments[cacheKey]) {
+      ongoingPayments[cacheKey] = {
+        status: "processing",
+        message: terminalSession.message,
+        method: terminalSession.method,
+        total: terminalSession.total,
+        promise: Promise.resolve(null),
+      };
+    }
+
+    if (terminalSession) {
+      if (terminalSession.isSplit) {
+        return;
+      }
+
+      setPaymentStatus(terminalSession.status);
+      setPaymentMessage(terminalSession.message);
+      setProcessing(terminalSession.status === "processing");
+      if (terminalSession.method) {
+        setMethod(terminalSession.method);
+      }
+
+      if (terminalSession.status === "success") {
+        const lockKey = (context?.tableId || displayOrderId || "MAIN_PAYMENT_LOCK").toString();
+        if (!finalizationLockRef.current[lockKey]) {
+          handleTerminalPaymentSuccess(
+            terminalSession.method || method,
+            terminalSession.total || total,
+            terminalSession.message
+          );
+        }
+      } else if (terminalSession.status === "cancelled") {
+        Alert.alert(
+          '❌ Transaction Cancelled',
+          'Payment was cancelled on the terminal. Please try again.',
+          [{ text: 'OK' }]
+        );
+        delete ongoingPayments[cacheKey];
+        if (context?.tableId) {
+          const tblIdStr = String(context.tableId);
+          useTerminalPaymentStore.getState().clearSession(tblIdStr);
+        }
+        setProcessing(false);
+        setPaymentStatus("cancelled");
+        setPaymentMessage(terminalSession.message || '❌ Transaction cancelled on terminal');
+      } else if (terminalSession.status === "failed") {
+        Alert.alert(
+          '❌ Payment Failed',
+          terminalSession.message || 'Failed to connect to terminal',
+          [{ text: 'OK' }]
+        );
+        delete ongoingPayments[cacheKey];
+        if (context?.tableId) {
+          const tblIdStr = String(context.tableId);
+          useTerminalPaymentStore.getState().clearSession(tblIdStr);
+        }
+        setProcessing(false);
+        setPaymentStatus("failed");
+        setPaymentMessage(terminalSession.message || '❌ Payment failed');
+      }
+    } else {
+      if (paymentStatus !== "idle") {
+        setPaymentStatus("idle");
+        setPaymentMessage("");
+        setProcessing(false);
+      }
+    }
+  }, [terminalSession, cacheKey]);
+
+  const settingsStore = useCompanySettingsStore((state: { settings: CompanySettings }) => state.settings);
+  const currencySymbol = settingsStore.currencySymbol || "$";
+  const gstRate = (settingsStore.gstPercentage || 0) / 100;
+  const scRate = (settingsStore.serviceChargePercentage || 0) / 100;
+
+  const handleTerminalPaymentSuccess = React.useCallback((methodName: string, totalAmt: number, msg?: string) => {
+    const lockKey = (context?.tableId || displayOrderId || "MAIN_PAYMENT_LOCK").toString();
+    if (finalizationLockRef.current[lockKey]) {
+      console.log(`[YeahPay] Already finalizing payment for ${lockKey}, skipping duplicate call.`);
+      return;
+    }
+    finalizationLockRef.current[lockKey] = true;
+
+    showToast({
+      type: 'success',
+      message: '✅ Payment Successful',
+      subtitle: `${currencySymbol}${totalAmt.toFixed(2)} paid via ${methodName}`
+    });
+
+    if (context?.tableId) {
+      const tblIdStr = String(context.tableId);
+      useTerminalPaymentStore.getState().clearSession(tblIdStr);
+      useTableNavigationStore.getState().clearTableLastScreen(tblIdStr);
+      useTableNavigationStore.getState().clearSelectedMethod(tblIdStr);
+    }
+    if (cacheKey) {
+      delete ongoingPayments[cacheKey];
+    }
+
+    const execFn = executeFinalPaymentRef.current || executeFinalPayment;
+    execFn(undefined, undefined, undefined, true).catch((err: any) => {
+      console.error("❌ executeFinalPayment error:", err);
+      delete finalizationLockRef.current[lockKey];
+    });
+  }, [cacheKey, context?.tableId, displayOrderId, currencySymbol]);
+
+  useEffect(() => {
+    executeFinalPaymentRef.current = executeFinalPayment;
+  });
+
 
   useEffect(() => {
     if (isFocused) {
@@ -265,7 +443,24 @@ export default function PaymentScreen() {
     }
   };
   const [time, setTime] = useState(new Date());
-  const [isSplitActive, setIsSplitActive] = useState(false);
+  const [isSplitActive, setIsSplitActive] = useState(params.isSplit === "true");
+
+  useEffect(() => {
+    if (params.isSplit === "true") {
+      setIsSplitActive(true);
+    }
+  }, [params.isSplit]);
+
+  useEffect(() => {
+    if (context?.tableId) {
+      // Only restore split mode from the explicit toggle flag — NOT session.isSplit,
+      // which persists in the store after the terminal resolves.
+      const isSplitPersisted = useTerminalPaymentStore.getState().activeSplitTables[context.tableId] === true;
+      if (isSplitPersisted) {
+        setIsSplitActive(true);
+      }
+    }
+  }, [context?.tableId]);
 
   // Member flow state
   const [showMemberModal, setShowMemberModal] = useState(false);
@@ -410,10 +605,6 @@ export default function PaymentScreen() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [isUPIVisible, setIsUPIVisible] = useState(false);
   const [isPayNowVisible, setIsPayNowVisible] = useState(false);
-  const settingsStore = useCompanySettingsStore((state: { settings: CompanySettings }) => state.settings);
-  const currencySymbol = settingsStore.currencySymbol || "$";
-  const gstRate = (settingsStore.gstPercentage || 0) / 100;
-  const scRate = (settingsStore.serviceChargePercentage || 0) / 100;
   const [roundOff, setRoundOff] = useState(0);
   const [roundType, setRoundType] = useState<
     "whole" | "five" | "ten" | "custom" | null
@@ -430,62 +621,70 @@ export default function PaymentScreen() {
   const [takeawayChargeAmt, setTakeawayChargeAmt] = useState(0);
 
   useEffect(() => {
-    console.log("🔍 [Payment] SC & Takeaway override useEffect triggered. displayOrderId:", displayOrderId, "isFocused:", isFocused);
-    if (displayOrderId && isFocused) {
-      const token = useAuthStore.getState().token;
-      const url = `${API_URL}/api/orders/${displayOrderId}/sc-override`;
-      console.log("📡 [Payment] Fetching SC override from:", url);
-      fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-        .then((r) => r.json())
-        .then((d) => {
-          console.log("✅ [Payment] SC override response:", d);
-          if (d?.serviceChargeReduced) {
-            setScReduced(true);
-            useServiceChargeOverrideStore.getState().setOverride(displayOrderId, true);
-          } else {
-            setScReduced(false);
-            useServiceChargeOverrideStore.getState().setOverride(displayOrderId, false);
-          }
-        })
-        .catch((e) => {
-          console.warn("❌ [Payment] Failed to fetch KDS/SC override status:", e);
-        });
+    if (!displayOrderId || !isFocused) return;
 
+    const token = useAuthStore.getState().token;
+
+    if (__DEV__) {
+      console.log("🔍 [Payment] SC & Takeaway override fetch triggered. displayOrderId:", displayOrderId);
+    }
+
+    // PERFORMANCE: Run both override fetches in parallel — previously sequential
+    Promise.all([
+      fetch(`${API_URL}/api/orders/${displayOrderId}/sc-override`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      }).then((r) => r.json()),
       fetch(`${API_URL}/api/orders/${displayOrderId}/takeaway-charge`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
+      }).then((r) => r.json()),
+    ])
+      .then(([scData, twData]) => {
+        if (__DEV__) {
+          console.log("✅ [Payment] SC override response:", scData);
+          console.log("✅ [Payment] Takeaway charge response:", twData);
+        }
+
+        // SC override
+        if (scData?.serviceChargeReduced) {
+          setScReduced(true);
+          useServiceChargeOverrideStore.getState().setOverride(displayOrderId, true);
+        } else {
+          setScReduced(false);
+          useServiceChargeOverrideStore.getState().setOverride(displayOrderId, false);
+        }
+
+        // Takeaway charge override
+        if (twData?.takeawayChargeOverride === 1) {
+          setTakeawayChargeApplied(false);
+        } else {
+          setTakeawayChargeApplied(true);
+        }
+        setTakeawayChargeAmt(twData?.takeawayCharge || 0);
       })
-        .then((r) => r.json())
-        .then((d) => {
-          console.log("✅ [Payment] Takeaway charge response:", d);
-          if (d?.takeawayChargeOverride === 1) {
-            setTakeawayChargeApplied(false);
-          } else {
-            setTakeawayChargeApplied(true);
-          }
-          setTakeawayChargeAmt(d?.takeawayCharge || 0);
-        })
-        .catch((e) => {
-          console.warn("❌ [Payment] Failed to fetch takeaway-charge status:", e);
-        });
-    }
+      .catch((e) => {
+        if (__DEV__) {
+          console.warn("❌ [Payment] Failed to fetch SC/takeaway override status:", e);
+        }
+      });
   }, [displayOrderId, isFocused]);
 
   const [pendingPayments, setPendingPayments] = useState<any[] | null>(null);
   const [payNowQrAmount, setPayNowQrAmount] = useState(0);
   const [upiQrAmount, setUpiQrAmount] = useState(0);
 
+  // ── Payment-mode normalizer (payment.tsx) ──────────────────────────────────
+  // All routing decisions use EXACT normalized comparisons — never .includes().
+  // This prevents "Yeahpay Paynow", "GPay", "QR" etc. from bleeding into the
+  // wrong flow.
+  const pmNormalize = (m: string) => (m ?? "").trim().toUpperCase();
+
   const calculatePayNowAmount = (paymentsList: any[]) => {
     return paymentsList.reduce((sum, p) => {
       const pm = paymentMethods.find((x) => x.position === p.payModeId);
       if (pm) {
-        const code = pm.payMode.toUpperCase().trim();
-        if (
-          code.includes("PAYNOW") ||
-          code.includes("QR") ||
-          code.includes("PAY-NOW")
-        ) {
+        // Only the exact payment mode "PAYNOW" (case-insensitive) counts
+        // as static-PayNow for display purposes.
+        if (pmNormalize(pm.payMode) === "PAYNOW") {
           return sum + p.amount;
         }
       }
@@ -497,12 +696,12 @@ export default function PaymentScreen() {
     return paymentsList.reduce((sum, p) => {
       const pm = paymentMethods.find((x) => x.position === p.payModeId);
       if (pm) {
-        const code = pm.payMode.toUpperCase().trim();
+        const code = pmNormalize(pm.payMode);
         if (
-          code.includes("UPI") ||
-          code.includes("GPAY") ||
-          code.includes("PHONE") ||
-          code.includes("PAYTM")
+          code === "UPI" ||
+          code === "GPAY" ||
+          code.startsWith("PHONE") ||
+          code === "PAYTM"
         ) {
           return sum + p.amount;
         }
@@ -519,14 +718,18 @@ export default function PaymentScreen() {
   const [loyaltyDiscountItems, setLoyaltyDiscountItems] = useState<any[]>([]);
   const [loyaltyDiscountAmount, setLoyaltyDiscountAmount] = useState(0);
 
+  // ── Loyalty dish rewards: debounced to avoid hammering the API on rapid
+  // cart socket updates. The 400 ms window lets back-to-back changes settle
+  // before issuing a new request. Business logic is unchanged.
   useEffect(() => {
-    const fetchDishLoyaltyRewards = async () => {
-      const phone = loyaltyPhone ? loyaltyPhone.trim() : "";
-      if (!phone || finalItemsRaw.length === 0 || isLedgerCollection) {
-        setLoyaltyDiscountItems([]);
-        setLoyaltyDiscountAmount(0);
-        return;
-      }
+    const phone = loyaltyPhone ? loyaltyPhone.trim() : "";
+    if (!phone || finalItemsRaw.length === 0 || isLedgerCollection) {
+      setLoyaltyDiscountItems([]);
+      setLoyaltyDiscountAmount(0);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
       try {
         const token = useAuthStore.getState().token;
         const mappedItems = finalItemsRaw.map((i: any) => ({
@@ -567,9 +770,9 @@ export default function PaymentScreen() {
         setLoyaltyDiscountItems([]);
         setLoyaltyDiscountAmount(0);
       }
-    };
+    }, 400); // debounce: wait 400 ms for cart changes to settle
 
-    fetchDishLoyaltyRewards();
+    return () => clearTimeout(timer);
   }, [loyaltyPhone, finalItemsRaw, isLedgerCollection]);
 
   const finalItems = useMemo(() => {
@@ -579,35 +782,51 @@ export default function PaymentScreen() {
   useEffect(() => {
     const init = async () => {
       const store = usePaymentSettingsStore.getState();
-      if (!store.hasLoadedMethods) {
-        setLoadingMethods(true);
-        try {
-          await Promise.all([
+      const settingsPromise = store.hasLoadedMethods
+        ? Promise.resolve()
+        : Promise.all([
             store.fetchSettings(),
             store.fetchPaymentMethods()
-          ]);
-        } catch (err) {
-          if (__DEV__) {
-            console.error("Failed to fetch settings/methods on payment screen mount:", err);
-          }
-        }
-      }
+          ]).catch((err) => {
+            if (__DEV__) console.error("Failed to fetch settings/methods on payment screen mount:", err);
+          });
+
+      // PERFORMANCE: Run table/order ID fetch in parallel with payment settings fetch
+      const tablePromise = context?.tableId
+        ? (async () => {
+            try {
+              const res = await fetch(`${API_URL}/api/tables/${context.tableId}`);
+              const data = await res.json();
+              const oid = data.table?.currentOrderId || data.table?.CurrentOrderId;
+              if (data.success && oid) {
+                useCartStore.getState().setTableOrderId(context.tableId!, oid);
+              }
+              // Fetch the cart items from the database to ensure they are loaded on direct routing
+              if (cart.length === 0) {
+                await useCartStore.getState().fetchCartFromDB(context.tableId!);
+              }
+            } catch (err) {
+              console.error("Failed to sync official Order ID and Cart:", err);
+            }
+          })()
+        : Promise.resolve();
+
+      // Wait for both to finish before applying payment methods from cache
+      await Promise.all([settingsPromise, tablePromise]);
       applyPaymentMethodsFromCache();
-      if (context?.tableId) {
-        try {
-          const res = await fetch(`${API_URL}/api/tables/${context.tableId}`);
-          const data = await res.json();
-          const oid = data.table?.currentOrderId || data.table?.CurrentOrderId;
-          if (data.success && oid) {
-            useCartStore.getState().setTableOrderId(context.tableId, oid);
-          }
-        } catch (err) {
-          console.error("Failed to sync official Order ID:", err);
-        }
-      }
     };
     init();
   }, []);
+
+  // 🔄 AUTO-SYNC: Update the local paymentMethods list as soon as the cache finishes loading
+  const hasLoadedMethods = usePaymentSettingsStore((s: any) => s.hasLoadedMethods);
+  const cachedMethods = usePaymentSettingsStore((s: any) => s.paymentMethods);
+
+  useEffect(() => {
+    if (hasLoadedMethods && cachedMethods.length > 0) {
+      applyPaymentMethodsFromCache();
+    }
+  }, [hasLoadedMethods, cachedMethods]);
 
   // 💵 QUICK CASH REAL-TIME SYNC — updates instantly when any terminal changes amounts
   useEffect(() => {
@@ -615,7 +834,6 @@ export default function PaymentScreen() {
     return unsubscribe;
   }, []);
 
-  // 🖥️ CUSTOMER DISPLAY REAL-TIME SYNC
   useEffect(() => {
     CustomerDisplaySync.isPaymentActive = true;
     return () => {
@@ -624,31 +842,40 @@ export default function PaymentScreen() {
     };
   }, []);
 
-
-
   const takeawayCharges = settingsStore.takeawayCharges || 0;
 
   const {
     subtotal,
     grossTotal: payGrossTotal,
     totalItemDiscount: payItemDiscount,
+    totalFocAmount,
     scEligibleSubtotal,
     calcTakeawayChargeAmt,
     takeawayQty,
+    hasMixedTWCharges,
+    singleTWRate,
   } = useMemo(() => {
     if (isLedgerCollection) {
       return {
         grossTotal: collectAmount || 0,
         totalItemDiscount: 0,
+        totalFocAmount: 0,
         subtotal: collectAmount || 0,
         scEligibleSubtotal: 0,
         calcTakeawayChargeAmt: 0,
         takeawayQty: 0,
+        hasMixedTWCharges: false,
+        singleTWRate: takeawayCharges,
       };
     }
-    const nonVoided = finalItems.filter((i: any) => i.status !== "VOIDED");
-    return nonVoided.reduce(
+
+    let firstRate: number | null = null;
+    let mixed = false;
+
+    const reduced = finalItems.reduce(
       (acc: any, item: any) => {
+        const isVoided = (item as any).status === "VOIDED";
+        if (isVoided) return acc;
         const baseTotal = (item.price || 0) * (item.qty || 0);
         let itemDiscount = 0;
         const discAmt = Number(item.discountAmount ?? item.discount ?? 0);
@@ -664,29 +891,51 @@ export default function PaymentScreen() {
           }
         }
         const itemSubtotal = baseTotal - itemDiscount;
+        const itemFocAmount = item.isFoc ? itemSubtotal : 0;
         const isTakeawayItem = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway;
         const isSC =
           !isTakeawayItem && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true);
-        const itemTWCharge = isTakeawayItem ? (item.qty || 1) * takeawayCharges : 0;
+        
+        let itemTWCharge = 0;
+        if (isTakeawayItem) {
+          const dishSpecificTW = Number(item.takeawayCharge ?? item.TakeawayCharge ?? 0);
+          const effectiveTWRate = dishSpecificTW > 0 ? dishSpecificTW : takeawayCharges;
+          itemTWCharge = (item.qty || 1) * effectiveTWRate;
+
+          if (firstRate === null) {
+            firstRate = effectiveTWRate;
+          } else if (firstRate !== effectiveTWRate) {
+            mixed = true;
+          }
+        }
+
         return {
           grossTotal: acc.grossTotal + baseTotal,
           totalItemDiscount: acc.totalItemDiscount + itemDiscount,
+          totalFocAmount: acc.totalFocAmount + itemFocAmount,
           subtotal: acc.subtotal + itemSubtotal,
           scEligibleSubtotal:
-            acc.scEligibleSubtotal + (isSC ? itemSubtotal : 0),
-          calcTakeawayChargeAmt: acc.calcTakeawayChargeAmt + itemTWCharge,
-          takeawayQty: acc.takeawayQty + (isTakeawayItem ? (item.qty || 1) : 0),
+            acc.scEligibleSubtotal + (isSC && !item.isFoc ? itemSubtotal : 0),
+          calcTakeawayChargeAmt: acc.calcTakeawayChargeAmt + (isTakeawayItem && !item.isFoc ? itemTWCharge : 0),
+          takeawayQty: acc.takeawayQty + (isTakeawayItem && !item.isFoc ? (item.qty || 1) : 0),
         };
       },
       {
         grossTotal: 0,
         totalItemDiscount: 0,
+        totalFocAmount: 0,
         subtotal: 0,
         scEligibleSubtotal: 0,
         calcTakeawayChargeAmt: 0,
         takeawayQty: 0,
       },
     );
+
+    return {
+      ...reduced,
+      hasMixedTWCharges: mixed,
+      singleTWRate: firstRate !== null ? firstRate : takeawayCharges,
+    };
   }, [finalItems, isLedgerCollection, collectAmount, takeawayCharges]);
 
   const allItemsHaveSC = useMemo(() => {
@@ -715,14 +964,16 @@ export default function PaymentScreen() {
   // Service Charge & GST: SC on net, GST on (net + SC)
   const netAfterDiscount = isLedgerCollection
     ? collectAmount || 0
-    : subtotal - discountAmount;
+    : Math.max(0, subtotal - discountAmount - totalFocAmount);
 
   // Pro-rate the bill-level discount to service-charge-eligible items
   const scEligibleNet = useMemo(() => {
     if (isLedgerCollection || subtotal <= 0) return 0;
-    const proportion = scEligibleSubtotal / subtotal;
+    const payableSubtotal = Math.max(0, subtotal - totalFocAmount);
+    if (payableSubtotal <= 0) return 0;
+    const proportion = scEligibleSubtotal / payableSubtotal;
     return Math.max(0, scEligibleSubtotal - proportion * discountAmount);
-  }, [scEligibleSubtotal, subtotal, discountAmount, isLedgerCollection]);
+  }, [scEligibleSubtotal, subtotal, totalFocAmount, discountAmount, isLedgerCollection]);
 
   const billDiscountProportion = useMemo(() => {
     if (isLedgerCollection) return 0;
@@ -730,8 +981,9 @@ export default function PaymentScreen() {
     if (discount.type === "percentage") {
       return discount.value / 100;
     }
-    return subtotal > 0 ? (discountAmount / subtotal) : 0;
-  }, [discount, subtotal, discountAmount, isLedgerCollection]);
+    const payableSubtotal = Math.max(0, subtotal - totalFocAmount);
+    return payableSubtotal > 0 ? (discountAmount / payableSubtotal) : 0;
+  }, [discount, subtotal, totalFocAmount, discountAmount, isLedgerCollection]);
 
   const currentTakeawayCharge = useMemo(() => {
     if (isLedgerCollection) return 0;
@@ -765,10 +1017,10 @@ export default function PaymentScreen() {
   const total = isLedgerCollection
     ? parseFloat(collectionAmount) || 0
     : Math.max(0, Math.round((baseTotal + roundOff) * 100) / 100);
-  const displayedTax = isLedgerCollection ? 0 : Math.round(tax * 100) / 100;
+  const displayedTax = isLedgerCollection ? 0 : Math.round((tax + Number.EPSILON) * 100) / 100;
   const displayedServiceCharge = isLedgerCollection
     ? 0
-    : Math.round(serviceChargeAmt * 100) / 100;
+    : Math.round((serviceChargeAmt + Number.EPSILON) * 100) / 100;
   const netAmountForDisplay = netAfterDiscount;
   const displayedRoundOff =
     roundOff !== 0
@@ -794,20 +1046,17 @@ export default function PaymentScreen() {
     CustomerDisplaySync.isPaymentActive = true;
 
     if (context && finalItems.length > 0) {
-      // Distinguish YeahPay PayNow and YeahPay Card from regular payment modes
-      // so the customer display shows custom cards and avoids static QRs.
-      const selectedMethodObj = paymentMethods.find((m: any) => m.payMode === method);
-      const isYeahPayMode = selectedMethodObj?.yeahPayEnabled === true;
-      const isPayNowPayMode = /PAYNOW|PAY-NOW/i.test(method);
-      const isCardPayMode = /CARD/i.test(method);
+      // Use exact normalized mode names — regex broad checks would confuse
+      // "Yeahpay Paynow" with plain "Paynow" and "Yeahpay Card" with plain "Card".
+      const _nm = pmNormalize(method);
+      const _isYeahPayPayNow = _nm === "YEAHPAY PAYNOW";
+      const _isYeahPayCard   = _nm === "YEAHPAY CARD";
 
       let displayPaymentMethod = method;
-      if (isYeahPayMode) {
-        if (isPayNowPayMode) {
-          displayPaymentMethod = 'YEAHPAY_PAYNOW';
-        } else if (isCardPayMode) {
-          displayPaymentMethod = 'YEAHPAY_CARD';
-        }
+      if (_isYeahPayPayNow) {
+        displayPaymentMethod = 'YEAHPAY_PAYNOW';
+      } else if (_isYeahPayCard) {
+        displayPaymentMethod = 'YEAHPAY_CARD';
       }
 
       // Include member name when MEMBER or CREDIT mode is selected
@@ -905,31 +1154,42 @@ export default function PaymentScreen() {
       const filtered = deduped.filter((m) => {
         if (m.active === 0 || m.active === false || m.active === "0")
           return false;
-        const mUpper = m.payMode.toUpperCase().trim();
+        const mUpper = pmNormalize(m.payMode);
         if (
           isLedgerCollection &&
           (mUpper === "MEMBER" || mUpper === "CREDIT" || mUpper === "LEDGER")
         )
           return false;
+        // UPI-family: exact matches only
         const isUPI =
-          mUpper.includes("UPI") ||
-          mUpper.includes("GPAY") ||
-          mUpper.includes("PHONE") ||
-          mUpper.includes("PAYTM");
-        const isPayNow =
-          mUpper.includes("PAYNOW") ||
-          mUpper.includes("QR") ||
-          mUpper.includes("PAY-NOW");
+          mUpper === "UPI" ||
+          mUpper === "GPAY" ||
+          mUpper.startsWith("PHONE") ||
+          mUpper === "PAYTM";
+        // Static-PayNow QR: ONLY the exact mode "PAYNOW" requires the QR URL.
+        // "Yeahpay Paynow" is terminal-based and must NEVER be hidden by !hasPayNow.
+        // "QR" is an independent payment mode and must NOT be hidden either.
+        const isStaticPayNow = mUpper === "PAYNOW";
         if (isUPI && !hasUPI) return false;
-        if (isPayNow && !hasPayNow) return false;
+        if (isStaticPayNow && !hasPayNow) return false;
         return true;
       });
 
       setPaymentMethods(filtered);
       if (filtered.length > 0) {
-        setMethod(filtered[0].payMode);
-        setSelectedDetail(filtered[0]);
-        if (isCashMethod(filtered[0].payMode)) {
+        // 🚀 Restore the previously saved method for this table (if any)
+        const tableId = useOrderContextStore.getState().currentOrder?.tableId;
+        const savedMethod = tableId
+          ? useTableNavigationStore.getState().getSelectedMethod(tableId.toString())
+          : undefined;
+        const restoredMethod = savedMethod
+          ? filtered.find((m) => m.payMode === savedMethod)
+          : undefined;
+        const activeMethod = restoredMethod || filtered[0];
+
+        setMethod(activeMethod.payMode);
+        setSelectedDetail(activeMethod);
+        if (isCashMethod(activeMethod.payMode)) {
           setCashInput(total.toFixed(2));
         }
       }
@@ -955,7 +1215,30 @@ export default function PaymentScreen() {
   };
 
   const handleSelectMethod = (m: PaymentMethod) => {
+    // 🚫 Block switching payment method while a terminal payment is in flight
+    if (paymentStatus === "processing") {
+      Alert.alert(
+        "Payment In Progress",
+        "A payment is currently being processed on the terminal. Please wait for it to complete.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    // 🧹 If a previous YeahPay result (success/failed/cancelled) is still showing,
+    // clear it so the new method starts with a clean slate.
+    if (paymentStatus !== "idle") {
+      setPaymentStatus("idle");
+      setPaymentMessage("");
+      setProcessing(false);
+      const tableId = useOrderContextStore.getState().currentOrder?.tableId;
+      if (tableId) {
+        useTerminalPaymentStore.getState().clearSession(tableId);
+      }
+    }
+
     setMethod(m.payMode);
+
     if (!isCashMethod(m.payMode)) {
       setRoundOff(0);
       setRoundType(null);
@@ -963,6 +1246,12 @@ export default function PaymentScreen() {
       setCashInput(total.toFixed(2));
     }
     setSelectedDetail(m);
+
+    // 💾 Persist selected method so it survives Home → back navigation
+    const tableId = useOrderContextStore.getState().currentOrder?.tableId;
+    if (tableId) {
+      useTableNavigationStore.getState().setSelectedMethod(tableId.toString(), m.payMode);
+    }
   };
 
   useEffect(() => {
@@ -973,110 +1262,146 @@ export default function PaymentScreen() {
   const confirmPayment = async () => {
     if (processing) return;
 
-    const selectedMethod = paymentMethods.find(m => m.payMode === method);
-    const isYeahPay = selectedMethod?.yeahPayEnabled === true;
-    const isCard = method.trim().toUpperCase().includes("CARD") && !method.trim().toUpperCase().includes("PAYNOW");
+    const selectedMethod = paymentMethods.find(m => 
+      m.payMode.trim().toUpperCase() === method.trim().toUpperCase() ||
+      pmNormalize(m.payMode) === pmNormalize(method)
+    );
+    // Use exact normalized mode names — ONLY "Yeahpay Paynow" and "Yeahpay Card"
+    // should trigger the YeahPay terminal and require Device SN.
+    const _methodNorm      = pmNormalize(method);
+    const isYeahPayPayNow  = _methodNorm === "YEAHPAY PAYNOW";
+    const isYeahPayCardMode = _methodNorm === "YEAHPAY CARD";
+    const isYeahPay        = isYeahPayPayNow || isYeahPayCardMode;
 
-    // ✅ YEAHPAY - Direct terminal call
-    if (isYeahPay && total > 0) {
+    // ✅ YEAHPAY - Direct terminal call (ONLY for "Yeahpay Paynow" / "Yeahpay Card")
+    if (isYeahPay && total > 0 && cacheKey) {
       setPaymentStatus("processing");
       setPaymentMessage("Processing payment...");
       setProcessing(true);
 
-      try {
-        const deviceSn = selectedMethod?.deviceSn || '';
-        const salt = selectedMethod?.deviceSalt || '';
+      const deviceSn = (selectedMethod?.deviceSn || (selectedMethod as any)?.DeviceSN || '').trim();
+      const salt = (selectedMethod?.deviceSalt || (selectedMethod as any)?.DeviceSalt || '').trim();
 
-        console.log('🔄 [MainPayment] Calling YeahPay terminal for:', method);
-        console.log('   Amount:', total);
-        console.log('   DeviceSN:', deviceSn);
+      console.log('🔄 [MainPayment] Calling YeahPay terminal for:', method);
+      console.log('   Amount:', total);
+      console.log('   DeviceSN:', deviceSn);
 
-        if (!deviceSn) {
-          setPaymentStatus("failed");
-          setPaymentMessage("DeviceSN not configured");
-          Alert.alert('Configuration Error', 'DeviceSN not configured.');
-          setProcessing(false);
-          return;
-        }
+      if (!deviceSn) {
+        setPaymentStatus("failed");
+        setPaymentMessage("DeviceSN not configured");
+        Alert.alert('Configuration Error', 'DeviceSN not configured.');
+        setProcessing(false);
+        return;
+      }
 
-        const endpoint = isCard ? '/api/yeahpay/card-payment' : '/api/yeahpay/paynow-payment';
-        const response = await fetch(`${API_URL}${endpoint}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(useAuthStore.getState().token ? { 'Authorization': `Bearer ${useAuthStore.getState().token}` } : {}),
-          },
-          body: JSON.stringify({
-            amount: total,
-            deviceSn: deviceSn,
-            salt: salt || ''
-          })
-        });
-
-        const result = await response.json();
-        console.log('✅ [MainPayment] Terminal response:', result);
-
-        const responseCode = result.code;
-
-        // ✅ SUCCESS - Code 0
-        if (result.success || responseCode === 0) {
-          setPaymentStatus("success");
-          setPaymentMessage(`✅ ${currencySymbol}${total.toFixed(2)} paid successfully via ${method}`);
-
-          showToast({
-            type: 'success',
-            message: '✅ Payment Successful',
-            subtitle: `${currencySymbol}${total.toFixed(2)} paid via ${method}`
+      const endpoint = isYeahPayCardMode ? '/api/yeahpay/card-payment' : '/api/yeahpay/paynow-payment';
+      
+      const fetchPromise = (async () => {
+        try {
+          const response = await fetch(`${API_URL}${endpoint}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(useAuthStore.getState().token ? { 'Authorization': `Bearer ${useAuthStore.getState().token}` } : {}),
+            },
+            body: JSON.stringify({
+              amount: total,
+              deviceSn: deviceSn,
+              salt: salt || '',
+              tableId: context?.tableId || ''
+            })
           });
 
-          // ✅ Proceed to save
-          executeFinalPayment();
+          const result = await response.json();
+          console.log('✅ [MainPayment] Terminal response:', result);
+          const responseCode = result.code;
+          let status: "success" | "cancelled" | "failed" = "failed";
+          let message = "";
 
-          // ✅ CANCELLED - Code -1027
-        } else if (responseCode === -1027) {
-          setPaymentStatus("cancelled");
-          setPaymentMessage(`❌ Transaction cancelled on terminal`);
+          if (result.success || responseCode === 0) {
+            status = "success";
+            message = `✅ ${currencySymbol}${total.toFixed(2)} paid successfully via ${method}`;
+          } else if (responseCode === -1027) {
+            status = "cancelled";
+            message = `❌ Transaction cancelled on terminal`;
+          } else if (responseCode === -1028 || responseCode === -1008) {
+            status = "failed";
+            message = `⏰ Transaction timeout`;
+          } else {
+            status = "failed";
+            message = `❌ ${result.msg || result.error || 'Payment declined'}`;
+          }
 
-          Alert.alert(
-            '❌ Transaction Cancelled',
-            'Payment was cancelled on the terminal. Please try again.',
-            [{ text: 'OK' }]
-          );
+          if (ongoingPayments[cacheKey]) {
+            ongoingPayments[cacheKey].status = status;
+            ongoingPayments[cacheKey].message = message;
+          }
+
+          if (context?.tableId) {
+            useTerminalPaymentStore.getState().updateSession(context.tableId, { status, message });
+          }
+
+          if (status === "success") {
+            handleTerminalPaymentSuccess(method, total, message);
+          } else if (status === "cancelled") {
+            setPaymentMessage(message);
+            Alert.alert('❌ Transaction Cancelled', 'Payment was cancelled on the terminal. Please try again.');
+            if (context?.tableId) {
+              useTerminalPaymentStore.getState().clearSession(String(context.tableId));
+            }
+            delete ongoingPayments[cacheKey];
+          } else {
+            setProcessing(false);
+            setPaymentStatus("failed");
+            setPaymentMessage(message);
+            Alert.alert('❌ Payment Failed', message || 'Failed to connect to terminal');
+            if (context?.tableId) {
+              useTerminalPaymentStore.getState().clearSession(String(context.tableId));
+            }
+            delete ongoingPayments[cacheKey];
+          }
+          return result;
+        } catch (error: any) {
+          console.error('❌ [MainPayment] Terminal error:', error);
+          const status = "failed";
+          const message = `❌ ${error.message}`;
+
+          if (ongoingPayments[cacheKey]) {
+            ongoingPayments[cacheKey].status = status;
+            ongoingPayments[cacheKey].message = message;
+          }
+
+          if (context?.tableId) {
+            useTerminalPaymentStore.getState().updateSession(context.tableId, { status: "failed", message });
+          }
           setProcessing(false);
-
-          // ✅ TIMEOUT - Code -1028, -1008
-        } else if (responseCode === -1028 || responseCode === -1008) {
           setPaymentStatus("failed");
-          setPaymentMessage(`⏰ Transaction timeout`);
-
-          Alert.alert(
-            '⏰ Transaction Timeout',
-            'Card read timed out. Please try again.',
-            [{ text: 'OK' }]
-          );
-          setProcessing(false);
-
-          // ✅ FAILED - Other errors
-        } else {
-          setPaymentStatus("failed");
-          const errorMsg = result.msg || result.error || 'Payment declined';
-          setPaymentMessage(`❌ ${errorMsg}`);
-
-          Alert.alert(
-            '❌ Payment Failed',
-            errorMsg,
-            [{ text: 'OK' }]
-          );
-          setProcessing(false);
+          setPaymentMessage(message);
+          Alert.alert('❌ Payment Failed', message);
+          delete ongoingPayments[cacheKey];
+          return { success: false, code: -1, msg: error.message };
         }
+      })();
 
-      } catch (error: any) {
-        console.error('❌ [MainPayment] Terminal error:', error);
-        setPaymentStatus("failed");
-        setPaymentMessage(`❌ ${error.message}`);
-        Alert.alert('Error', error.message || 'Failed to connect to terminal');
-        setProcessing(false);
+      ongoingPayments[cacheKey] = {
+        status: "processing",
+        message: "Processing payment...",
+        method: method,
+        total: total,
+        promise: fetchPromise
+      };
+
+      // 🚀 Sync to Zustand store so table grid can show live terminal badge
+      if (context?.tableId) {
+        useTerminalPaymentStore.getState().setSession(context.tableId, {
+          tableId: context.tableId,
+          status: "processing",
+          message: "Processing payment...",
+          method: method,
+          total: total,
+        });
       }
+
       return;
     }
     // ============================================================
@@ -1167,14 +1492,16 @@ export default function PaymentScreen() {
       return;
     }
 
-    // ✅ Only show QR for REGULAR PayNow (NOT YeahPay)
-    if (mUpper.includes("PAYNOW") && settings.payNowQrUrl) {
+    // Show static PayNow QR ONLY when the mode is exactly "PAYNOW" (case-insensitive).
+    // "Yeahpay Paynow" is already handled above by the isYeahPay block and must
+    // NEVER reach this point, but we use an exact match here as a belt-and-suspenders guard.
+    if (mUpper === "PAYNOW" && settings.payNowQrUrl) {
       setIsPayNowVisible(true);
       return;
     }
 
-    // ✅ Only show UPI for regular UPI
-    if (mUpper.includes("UPI") && settings.upiId) {
+    // Show UPI modal only for the exact UPI-family modes
+    if ((mUpper === "UPI") && settings.upiId) {
       setIsUPIVisible(true);
       return;
     }
@@ -1188,8 +1515,11 @@ export default function PaymentScreen() {
       referenceNo?: string;
     }>,
     memberOverride?: any,
+    focAmount?: number,
+    bypassProcessingCheck?: boolean,
   ) => {
-    if (processing) return;
+    executeFinalPaymentRef.current = executeFinalPayment;
+    if (processing && !bypassProcessingCheck) return;
     setProcessing(true);
     if (isLedgerCollection) {
       const selectedMode = paymentMethods.find((m) => m.payMode === method);
@@ -1292,62 +1622,126 @@ export default function PaymentScreen() {
     const tableState = context?.tableId
       ? useTableStatusStore.getState().tableMap[context.tableId.toLowerCase()]
       : null;
-    const saleData = {
-      settlementId: checkoutSessionId,
-      orderId: displayOrderId || activeOrder?.orderId,
-      orderType:
-        context?.orderType === "DINE_IN"
-          ? "DINE-IN"
-          : context?.orderType || "DINE-IN",
-      tableNo:
-        context?.orderType === "TAKEAWAY"
-          ? context?.takeawayNo
-          : context?.tableNo,
-      section: context?.section,
-      items: finalItems.map((item: any) => ({
-        lineItemId: item.lineItemId,
-        dishId: item.dishId || item.DishId || item.id,
-        name: item.name,
-        songName: item.songName || item.SongName || "",
-        qty: item.qty,
-        price: item.price,
-        status: item.status,
-        discountAmount: item.discountAmount ?? item.discount ?? null,
-        discountType: item.discountType ?? null,
-        isDishReward: item.isDishReward || false,
-        rewardRuleId: item.rewardRuleId || null,
-        rewardDishId: item.rewardDishId || null,
-        modifiers: item.modifiers || null,
-        comboSelections: item.comboSelections || null,
-      })),
-      subTotal: subtotal,
-      taxAmount: displayedTax,
-      serviceCharge: displayedServiceCharge,
-      takeawayCharge: currentTakeawayCharge,
-      discountAmount: discountAmount + payItemDiscount,
-      discountType: discount?.type || "fixed",
-      totalAmount: total,
-      paymentMethod: payments && payments.length > 0 ? "SPLIT" : method.trim(),
-      payments: payments || null,
-      memberId: memberOverride?.MemberId || selectedMember?.MemberId || null,
-      roundOff: displayedRoundOff,
-      cashierId: user?.userId,
-      tableId: context?.tableId,
-      serverId: context?.serverId,
-      serverName: context?.serverName,
-      isSplit: !!splitItems,
-      splitItems: splitItems,
-      discountId: discount?.discountId || null,
-      discountPercentage:
-        discount?.type === "percentage" ? discount.value : null,
-      discountRemarks: discount?.label || null,
-      orderDiscountAmount: discountAmount,
-      itemDiscountAmount: payItemDiscount,
-      customerName: loyaltyName || tableState?.customerName || null,
-      mobileNo: loyaltyPhone || null,
-      pax: tableState?.pax || null,
-      rewardMemberId: rewardMemberId || null,
-    };
+      // FOC discount: disabled, FOC is a normal paymode
+      const effectiveFocAmount = 0;
+      const effectiveDiscountAmount = discountAmount + payItemDiscount;
+
+      const selectedMode = paymentMethods.find(x => x.payMode.toUpperCase().trim() === method.toUpperCase().trim());
+      const payModeId = selectedMode ? selectedMode.position || 1 : 1;
+
+      const focMode = paymentMethods.find(x => x.payMode.toUpperCase().trim() === "FOC");
+      const focModeId = focMode ? focMode.position || 1 : 1;
+
+      let finalPayments = null;
+      let finalTotalAmount = total;
+
+      if (payments && payments.length > 0) {
+        finalPayments = payments.map(p => ({
+          payModeId: p.payModeId,
+          payMode: (p as any).payMode || paymentMethods.find(x => x.position === p.payModeId)?.payMode || "CASH",
+          amount: p.amount,
+          referenceNo: p.referenceNo || ""
+        }));
+        finalTotalAmount = payments.reduce((sum, p) => sum + p.amount, 0);
+      } else {
+        if (method.trim().toUpperCase() === "FOC") {
+          const originalTaxableAmount = subtotal + serviceChargeAmt + currentTakeawayCharge;
+          const originalTax = originalTaxableAmount * gstRate;
+          const originalBillTotal = originalTaxableAmount + originalTax;
+          
+          let roundedTotal = originalBillTotal;
+          if (roundType === "whole") roundedTotal = Math.round(originalBillTotal);
+          else if (roundType === "five") roundedTotal = Math.round(originalBillTotal * 20) / 20;
+
+          finalPayments = [{
+            payModeId: focModeId,
+            payMode: "FOC",
+            amount: roundedTotal,
+            referenceNo: ""
+          }];
+          finalTotalAmount = roundedTotal;
+        } else {
+          finalPayments = [];
+          if (totalFocAmount > 0) {
+            finalPayments.push({
+              payModeId: focModeId,
+              payMode: "FOC",
+              amount: totalFocAmount,
+              referenceNo: ""
+            });
+          }
+          // YeahPay: terminal was already called directly, mark as pre-processed
+          const _mNorm = method.trim().toUpperCase();
+          const _isYeahPayFinal = _mNorm === "YEAHPAY PAYNOW" || _mNorm === "YEAHPAY CARD";
+          finalPayments.push({
+            payModeId,
+            payMode: method,
+            amount: total,
+            referenceNo: "",
+            isTerminalAlreadyProcessed: _isYeahPayFinal,
+          });
+          finalTotalAmount = total + totalFocAmount;
+        }
+      }
+
+      const saleData = {
+        settlementId: checkoutSessionId,
+        orderId: displayOrderId || activeOrder?.orderId,
+        orderType:
+          context?.orderType === "DINE_IN"
+            ? "DINE-IN"
+            : context?.orderType || "DINE-IN",
+        tableNo:
+          context?.orderType === "TAKEAWAY"
+            ? context?.takeawayNo
+            : context?.tableNo,
+        section: context?.section,
+        items: finalItems.map((item: any) => {
+          const isItemFoc = item.isFoc || item.IsFoc || false;
+          return {
+            lineItemId: item.lineItemId,
+            dishId: item.dishId || item.DishId || item.id,
+            name: item.name,
+            songName: item.songName || item.SongName || "",
+            qty: item.qty,
+            price: item.price,
+            status: item.status,
+            discountAmount: isItemFoc ? item.price : (item.discountAmount ?? item.discount ?? null),
+            discountType: isItemFoc ? "FOC" : (item.discountType ?? null),
+            isDishReward: item.isDishReward || false,
+            rewardRuleId: item.rewardRuleId || null,
+            rewardDishId: item.rewardDishId || null,
+            modifiers: item.modifiers || null,
+            comboSelections: item.comboSelections || null,
+          };
+        }),
+        subTotal: subtotal,
+        taxAmount: displayedTax,
+        serviceCharge: displayedServiceCharge,
+        takeawayCharge: currentTakeawayCharge,
+        discountAmount: effectiveDiscountAmount,
+        discountType: effectiveFocAmount > 0 ? "fixed" : (discount?.type || "fixed"),
+        totalAmount: finalTotalAmount,
+        paymentMethod: finalPayments && finalPayments.length > 1 ? "SPLIT" : (finalPayments && finalPayments[0]?.payMode || method).trim(),
+        payments: finalPayments,
+        memberId: memberOverride?.MemberId || selectedMember?.MemberId || null,
+        roundOff: displayedRoundOff,
+        cashierId: user?.userId,
+        tableId: context?.tableId,
+        serverId: context?.serverId,
+        serverName: context?.serverName,
+        isSplit: !!splitItems,
+        splitItems: splitItems,
+        discountId: effectiveFocAmount > 0 ? null : (discount?.discountId || null),
+        discountPercentage: effectiveFocAmount > 0 ? null : (discount?.type === "percentage" ? discount.value : null),
+        discountRemarks: effectiveFocAmount > 0 ? "FOC" : (discount?.label || null),
+        orderDiscountAmount: effectiveFocAmount > 0 ? effectiveFocAmount : discountAmount,
+        itemDiscountAmount: payItemDiscount,
+        customerName: loyaltyName || tableState?.customerName || null,
+        mobileNo: loyaltyPhone || null,
+        pax: tableState?.pax || null,
+        rewardMemberId: rewardMemberId || null,
+      };
 
     try {
       const response = await fetch(`${API_URL}/api/sales/save`, {
@@ -1359,14 +1753,14 @@ export default function PaymentScreen() {
         body: JSON.stringify(saleData),
       });
       const result = await response.json();
-      if (result.success) {
+      if (result.success || response.status === 409) {
         // Navigate first — let the success screen mount fully before mutating store state
         router.push({
           pathname: "/payment_success" as any,
           params: {
-            total: total.toFixed(2),
+            total: finalTotalAmount.toFixed(2),
             paidNum: (payments && payments.length > 0
-              ? total
+              ? finalTotalAmount
               : paidNum
             ).toFixed(2),
             change: (payments && payments.length > 0 ? 0 : change).toFixed(2),
@@ -1377,9 +1771,11 @@ export default function PaymentScreen() {
             section: context?.section ?? "",
             orderType: context?.orderType ?? "",
             discountInfo: JSON.stringify(
-              discount?.applied && discountAmount > 0
-                ? { ...discount, amount: discountAmount, subtotal }
-                : {},
+              effectiveFocAmount > 0
+                ? { applied: true, type: "fixed", value: effectiveFocAmount + discountAmount, amount: effectiveFocAmount + discountAmount, label: "FOC", subtotal }
+                : (discount?.applied && discountAmount > 0
+                  ? { ...discount, amount: discountAmount, subtotal }
+                  : {})
             ),
             items: JSON.stringify(finalItems || []),
             roundOff: displayedRoundOff.toFixed(2),
@@ -1390,13 +1786,14 @@ export default function PaymentScreen() {
             rewardPointsEarned: String(result.rewardPointsEarned || 0),
             memberRewardBalance: String(result.memberRewardBalance || 0),
             mobileNo: loyaltyPhone || "",
+            tableId: context?.tableId ? String(context.tableId) : "",
           },
         });
         const ctxSnapshot = context;
         const splitSnapshot = splitItems;
         const orderIdSnapshot = displayOrderId;
         const isOrderClosedFromResponse = !!result.isOrderClosed;
-        // Delay cleanup so the success screen renders before store mutations
+        
         setTimeout(() => {
           if (ctxSnapshot) {
             if (splitSnapshot) {
@@ -1413,7 +1810,12 @@ export default function PaymentScreen() {
                 }
 
                 if (ctxSnapshot.tableId) {
-                  useCartStore.getState().clearTableSession(ctxSnapshot.tableId);
+                  const tblIdStr = String(ctxSnapshot.tableId);
+                  useCartStore.getState().clearTableSession(tblIdStr);
+                  useTableNavigationStore.getState().clearTableLastScreen(tblIdStr);
+                  useTableNavigationStore.getState().clearSelectedMethod(tblIdStr);
+                  useTerminalPaymentStore.getState().clearSession(tblIdStr);
+                  delete ongoingPayments[tblIdStr];
                   closeActiveOrder(orderIdSnapshot || "");
                 }
 
@@ -1432,18 +1834,30 @@ export default function PaymentScreen() {
               }
 
               if (ctxSnapshot.tableId) {
-                useCartStore.getState().clearTableSession(ctxSnapshot.tableId);
+                const tblIdStr = String(ctxSnapshot.tableId);
+                useCartStore.getState().clearTableSession(tblIdStr);
+                useTableNavigationStore.getState().clearTableLastScreen(tblIdStr);
+                useTableNavigationStore.getState().clearSelectedMethod(tblIdStr);
+                useTerminalPaymentStore.getState().clearSession(tblIdStr);
+                delete ongoingPayments[tblIdStr];
                 closeActiveOrder(orderIdSnapshot || "");
               }
 
               useOrderContextStore.getState().clearOrderContext();
             }
           }
-        }, 800);
+          setPaymentStatus("idle");
+          setPaymentMessage("");
+          setProcessing(false);
+        }, 50);
       } else {
+        const lockKey = (context?.tableId || displayOrderId || "MAIN_PAYMENT_LOCK").toString();
+        delete finalizationLockRef.current[lockKey];
         showToast({ type: "error", message: "Failed", subtitle: result.error });
       }
     } catch (e: any) {
+      const lockKey = (context?.tableId || displayOrderId || "MAIN_PAYMENT_LOCK").toString();
+      delete finalizationLockRef.current[lockKey];
       console.error("❌ [Sales Checkout Network Failure Details]:", {
         endpoint: `${API_URL}/api/sales/save`,
         message: e?.message || e,
@@ -2180,10 +2594,10 @@ export default function PaymentScreen() {
           <TouchableOpacity
             style={styles.backBtn}
             onPress={() => {
-              if (router.canGoBack()) {
-                router.back();
+              if (generalSettings?.enableSkipSummaryScreen) {
+                router.replace("/menu/thai_kitchen");
               } else {
-                router.replace("/(tabs)/category");
+                router.replace("/summary");
               }
             }}
           >
@@ -2248,6 +2662,7 @@ export default function PaymentScreen() {
             </View>
           </View>
           <View style={{ flexDirection: "row", gap: 8 }}>
+            <WindowControls buttonStyle={styles.backBtn} />
             <TouchableOpacity
               style={[
                 styles.backBtn,
@@ -2263,7 +2678,13 @@ export default function PaymentScreen() {
                   gap: 6,
                 },
               ]}
-              onPress={() => setIsSplitActive(!isSplitActive)}
+              onPress={() => {
+                const nextActive = !isSplitActive;
+                setIsSplitActive(nextActive);
+                if (context?.tableId) {
+                  useTerminalPaymentStore.getState().setSplitTableActive(context.tableId, nextActive);
+                }
+              }}
               activeOpacity={0.7}
             >
               <Ionicons
@@ -2380,11 +2801,18 @@ export default function PaymentScreen() {
                     }))}
                     selectedMember={selectedMember}
                     onSelectMember={(mode) => {
-                      if (mode) setMethod(mode);
+                      if (mode) {
+                        setMethod(mode);
+                        // 💾 Persist member-selected mode
+                        const tableId = useOrderContextStore.getState().currentOrder?.tableId;
+                        if (tableId) {
+                          useTableNavigationStore.getState().setSelectedMethod(tableId.toString(), mode);
+                        }
+                      }
                       setShowMemberModal(true);
                     }}
                     onComplete={(finalPayments) => {
-                      executeFinalPayment(finalPayments);
+                      executeFinalPayment(finalPayments, undefined, undefined);
                     }}
                     onCancel={() => setIsSplitActive(false)}
                     processing={processing}
@@ -2472,31 +2900,49 @@ export default function PaymentScreen() {
                         paymentStatus === "cancelled" && styles.statusCancelled,
                         paymentStatus === "failed" && styles.statusFailed,
                         paymentStatus === "processing" && styles.statusProcessing,
+                        { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }
                       ]}>
-                        <Ionicons
-                          name={
-                            paymentStatus === "success" ? "checkmark-circle" :
-                              paymentStatus === "cancelled" ? "close-circle" :
-                                paymentStatus === "failed" ? "alert-circle" :
-                                  "sync"
-                          }
-                          size={24}
-                          color={
-                            paymentStatus === "success" ? "#22c55e" :
-                              paymentStatus === "cancelled" ? "#f59e0b" :
-                                paymentStatus === "failed" ? "#ef4444" :
-                                  "#3b82f6"
-                          }
-                        />
-                        <Text style={[
-                          styles.statusMessage,
-                          paymentStatus === "success" && styles.statusMessageSuccess,
-                          paymentStatus === "cancelled" && styles.statusMessageCancelled,
-                          paymentStatus === "failed" && styles.statusMessageFailed,
-                          paymentStatus === "processing" && styles.statusMessageProcessing,
-                        ]}>
-                          {paymentMessage}
-                        </Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", flex: 1, gap: 8 }}>
+                          {paymentStatus === "processing" ? (
+                            <RotatingSyncIcon size={24} color="#3b82f6" />
+                          ) : (
+                            <Ionicons
+                              name={
+                                paymentStatus === "success" ? "checkmark-circle" :
+                                  paymentStatus === "cancelled" ? "close-circle" :
+                                    "alert-circle"
+                              }
+                              size={24}
+                              color={
+                                paymentStatus === "success" ? "#22c55e" :
+                                  paymentStatus === "cancelled" ? "#f59e0b" :
+                                    "#ef4444"
+                              }
+                            />
+                          )}
+                          <Text style={[
+                            styles.statusMessage,
+                            paymentStatus === "success" && styles.statusMessageSuccess,
+                            paymentStatus === "cancelled" && styles.statusMessageCancelled,
+                            paymentStatus === "failed" && styles.statusMessageFailed,
+                            paymentStatus === "processing" && styles.statusMessageProcessing,
+                            { flex: 1, marginRight: 8 }
+                          ]}>
+                            {paymentMessage}
+                          </Text>
+                        </View>
+                        {paymentStatus !== "processing" && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              if (context?.tableId) {
+                                useTerminalPaymentStore.getState().clearSession(context.tableId);
+                              }
+                            }}
+                            style={{ padding: 4 }}
+                          >
+                            <Ionicons name="close" size={20} color="#64748b" />
+                          </TouchableOpacity>
+                        )}
                       </View>
                     )}
 
@@ -2985,7 +3431,7 @@ export default function PaymentScreen() {
                       {currentTakeawayCharge > 0 && (
                         <View style={styles.breakRow}>
                           <Text style={styles.breakLabel}>
-                            Takeaway Charges ({currencySymbol}{takeawayCharges.toFixed(2)} * {takeawayQty})
+                            Takeaway Charges
                           </Text>
                           <Text style={styles.breakValue}>
                             {currencySymbol}
@@ -3283,15 +3729,12 @@ export default function PaymentScreen() {
                       <View style={styles.sectionHeader}>
                         <Text style={styles.sectionTitle}>Order Items</Text>
                       </View>
-                      <View style={{ maxHeight: 380 }}>
-                        <FlatList
-                          data={finalItems}
-                          keyExtractor={(_, index) => index.toString()}
-                          renderItem={renderItem}
-                          scrollEnabled={true}
-                          nestedScrollEnabled={true}
-                          showsVerticalScrollIndicator={true}
-                        />
+                      <View>
+                        {finalItems.map((item: any, index: number) => (
+                          <React.Fragment key={item.id || index.toString()}>
+                            {renderItem({ item })}
+                          </React.Fragment>
+                        ))}
                       </View>
                     </View>
                   )}
@@ -4115,13 +4558,34 @@ const styles = StyleSheet.create({
     color: '#059669',
   },
   cashSection: { marginTop: 5 },
-  sectionHeader: { marginBottom: 8 },
+  sectionHeader: {
+    marginBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   sectionTitle: {
     fontSize: 12,
     fontFamily: Fonts.black,
     color: Theme.textPrimary,
     textTransform: "uppercase",
     letterSpacing: 0.5,
+  },
+  openDrawerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff7ed",
+    borderWidth: 1,
+    borderColor: "#ffedd5",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    gap: 5,
+  },
+  openDrawerBtnText: {
+    fontSize: 11,
+    fontFamily: Fonts.bold,
+    color: "#ea580c",
   },
   cashInputBox: {
     flexDirection: "row",

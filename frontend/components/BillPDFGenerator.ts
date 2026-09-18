@@ -215,14 +215,28 @@ static async loadSettings(userId?: string | number): Promise<CompanySettings> {
         
         // ✅ Add timestamp to prevent caching
         const timestamp = Date.now();
+        const url = `${API_URL}/api/company-settings/${targetId}?_t=${timestamp}`;
+
+        // Attempt save via native fetch first to bypass any axios interceptor/response parsing issue
+        try {
+            const fetchRes = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(dbSettings)
+            });
+            if (fetchRes.ok) {
+                delete this.settingsCache[targetId];
+                return true;
+            }
+        } catch (fetchErr) {
+            console.log('⚠️ Fetch post attempt failed, trying API axios fallback:', fetchErr);
+        }
         
-        // ✅ STEP 1: POST settings (Upsert)
+        // Fallback to API axios client
         const response = await API.post(`/company-settings/${targetId}?_t=${timestamp}`, dbSettings);
-        
         console.log('✅ SAVE RESPONSE:', response.data);
         
-        if (response.data && response.data.success) {
-            // Invalidate settings cache
+        if (response.status === 200 || response.status === 201 || (response.data && (response.data.success !== false))) {
             delete this.settingsCache[targetId];
             return true;
         }
@@ -270,7 +284,7 @@ private static escapeHtml(str: string): string {
             applied: true,
             type: saleData.discount.type || 'percentage',
             value: saleData.discount.value || 0,
-            amount: saleData.discount.amount || 0
+            amount: saleData.discount.amount || saleData.discountAmount || 0
         };
         console.log('📋 Using discount from saleData:', finalDiscountInfo);
     }
@@ -321,10 +335,22 @@ private static escapeHtml(str: string): string {
       totalItemDiscount += itemDiscount;
     });
 
+    if (finalDiscountInfo && (!finalDiscountInfo.amount || finalDiscountInfo.amount === 0) && finalDiscountInfo.value > 0) {
+      const subtotalPostItemDisc = Math.max(0, grossTotal - totalItemDiscount);
+      if (finalDiscountInfo.type === "percentage") {
+        finalDiscountInfo.amount = (subtotalPostItemDisc * finalDiscountInfo.value) / 100;
+      } else {
+        finalDiscountInfo.amount = Math.min(finalDiscountInfo.value, subtotalPostItemDisc);
+      }
+    }
+
+    const focPayment = (saleData.payments || []).find((p: any) => String(p.payMode || p.payModeName || p.Remarks || '').trim().toUpperCase() === 'FOC');
+    const focAmt = focPayment ? Number(focPayment.amount ?? focPayment.Amount ?? 0) : 0;
     const orderDiscount = finalDiscountInfo?.amount || 0;
+    const normalDiscount = Math.max(0, orderDiscount - focAmt);
+    const hasOrderDiscount = normalDiscount > 0;
+    const hasAnyDiscount = totalItemDiscount > 0 || orderDiscount > 0;
     const currentSubtotal = grossTotal - totalItemDiscount - orderDiscount;
-    const hasOrderDiscount = finalDiscountInfo?.applied && finalDiscountInfo.amount > 0;
-    const hasAnyDiscount = totalItemDiscount > 0 || hasOrderDiscount;
     const originalSubTotal = grossTotal;
 
     const activeItems = (saleData.items || []).filter((i: any) => i.status !== 'VOIDED' && i.statusCode !== 0);
@@ -377,22 +403,38 @@ private static escapeHtml(str: string): string {
 
     const takeawayRateFromSettings = parseFloat(String((company as any).TakeawayCharges ?? company.takeawayCharges ?? 0)) || 0;
     let takeawayCharge = saleData.takeawayCharge !== undefined ? parseFloat(String(saleData.takeawayCharge)) : 0;
-    let takeawayQty = (saleData.items || []).reduce((sum: number, item: any) => {
+    
+    let firstRate: number | null = null;
+    let mixed = false;
+    let calculatedTWCharge = 0;
+    let takeawayQty = 0;
+
+    (saleData.items || []).forEach((item: any) => {
       const isTW = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway;
-      const isVoided = item.status === 'VOIDED' || item.StatusCode === 0;
+      const isVoided = item.status === 'VOIDED' || item.status === 'VOID' || item.StatusCode === 0;
       if (isTW && !isVoided) {
-        return sum + (item.qty || item.Qty || item.quantity || 1);
+        const qtyNum = parseInt(String(item.qty || item.Qty || item.quantity || 1)) || 1;
+        takeawayQty += qtyNum;
+
+        const dishSpecificTW = Number(item.takeawayCharge ?? item.TakeawayCharge ?? 0);
+        const effectiveTWRate = dishSpecificTW > 0 ? dishSpecificTW : takeawayRateFromSettings;
+        calculatedTWCharge += qtyNum * effectiveTWRate;
+
+        if (firstRate === null) {
+          firstRate = effectiveTWRate;
+        } else if (firstRate !== effectiveTWRate) {
+          mixed = true;
+        }
       }
-      return sum;
-    }, 0);
+    });
 
     if (takeawayQty === 0 && takeawayCharge > 0) {
       const effectiveRate = takeawayRateFromSettings > 0 ? takeawayRateFromSettings : takeawayCharge;
       takeawayQty = Math.round(takeawayCharge / effectiveRate) || 1;
     } else if (takeawayQty > 0 && takeawayCharge === 0) {
-      takeawayCharge = takeawayQty * takeawayRateFromSettings;
+      takeawayCharge = calculatedTWCharge > 0 ? calculatedTWCharge : takeawayQty * takeawayRateFromSettings;
     }
-    const takeawayRate = takeawayQty > 0 ? (takeawayCharge / takeawayQty) : takeawayRateFromSettings;
+    const takeawayRate = takeawayQty > 0 ? (firstRate !== null && !mixed ? firstRate : takeawayCharge / takeawayQty) : takeawayRateFromSettings;
     const taxableAmount = currentSubtotal + serviceChargeAmount + takeawayCharge;
     const hasSC = serviceChargeAmount > 0;
     const effectiveSCPercentage = serviceChargeAmount > 0 && currentSubtotal > 0
@@ -436,12 +478,23 @@ private static escapeHtml(str: string): string {
               }).join('')
             : '';
 
-          const comboSelectionsHTML = (item.isCombo && item.comboSelections && Array.isArray(item.comboSelections))
-            ? item.comboSelections.map((group: any) => {
-                return group.items?.map((opt: any) => {
-                  const effectiveAdd = (parseFloat(opt.surcharge || 0) + parseFloat(opt.dishPrice || 0));
-                  return `<div class="item-modifiers">↳ ${opt.name}${effectiveAdd > 0 ? ` (+${currencySymbol}${effectiveAdd.toFixed(2)})` : ''}</div>`;
-                }).join('') || '';
+          const comboSels = item.comboSelections || 
+            (typeof item.ComboDetailsJSON === 'string' && item.ComboDetailsJSON 
+              ? (() => { try { const p = JSON.parse(item.ComboDetailsJSON); return Array.isArray(p) ? p : p.groups || p.items || []; } catch { return undefined; } })() 
+              : (Array.isArray(item.ComboDetailsJSON) ? item.ComboDetailsJSON : undefined)) || [];
+          const hasCombo = Array.isArray(comboSels) && comboSels.length > 0;
+
+          const comboSelectionsHTML = hasCombo
+            ? comboSels.map((group: any) => {
+                const choices = group.items || group.dishes || (Array.isArray(group) ? group : [group]);
+                if (Array.isArray(choices)) {
+                  return choices.map((opt: any) => {
+                    const effectiveAdd = (parseFloat(opt.surcharge || 0) + parseFloat(opt.dishPrice || 0));
+                    const optName = opt.name || opt.DishName || opt.itemName || "";
+                    return `<div class="item-modifiers">↳ ${optName}${effectiveAdd > 0 ? ` (+${currencySymbol}${effectiveAdd.toFixed(2)})` : ''}</div>`;
+                  }).join('') || '';
+                }
+                return '';
               }).join('')
             : '';
 
@@ -747,15 +800,11 @@ private static escapeHtml(str: string): string {
           <div class="bill-details">
             <div class="bill-box">
               <div class="detail-row">
-                <span class="detail-label">INVOICE NO:</span>
-                <span class="detail-value">${billNo}</span>
+                <span class="detail-label">INVOICE NO: ${billNo}</span>
+                ${saleData.tableNo ? `
+                  <span class="detail-value" style="font-size: 14px; font-weight: bold;">TABLE: ${/^\d+$/.test(String(saleData.tableNo).trim()) ? String(saleData.tableNo).trim().padStart(2, '0') : saleData.tableNo}</span>
+                ` : ''}
               </div>
-              ${saleData.tableNo ? `
-                <div class="detail-row" style="margin-top: 1.5mm; padding-top: 1mm; border-top: 1px dashed #ccc;">
-                  <span class="detail-label" style="font-size: 14px; font-weight: 900;">TABLE NO:</span>
-                  <span class="detail-value" style="font-size: 14px; font-weight: 900;">${saleData.tableNo}</span>
-                </div>
-              ` : ''}
               ${saleData.waiterName && saleData.waiterName !== "Staff" ? `
                 <div class="detail-row" style="margin-top: 1mm;">
                   <span class="detail-label" style="font-size: 9px; color: #666;">WAITER:</span>
@@ -815,7 +864,7 @@ private static escapeHtml(str: string): string {
             ${hasOrderDiscount ? `
             <div class="total-row">
               <span>Discount${finalDiscountInfo?.type === 'percentage' ? ` (${finalDiscountInfo?.value}%)` : ''}:</span>
-              <span>-${currencySymbol}${finalDiscountInfo?.amount.toFixed(2)}</span>
+              <span>-${currencySymbol}${normalDiscount.toFixed(2)}</span>
             </div>
             ` : ''}
             <div class="total-row" style="margin-top: 1.5mm; border-top: 1px dashed #ccc; padding-top: 1.5mm;">
@@ -837,7 +886,7 @@ private static escapeHtml(str: string): string {
              ` : ''}
              ${takeawayCharge > 0 ? `
               <div class="total-row">
-                <span>Takeaway Charges (${currencySymbol}${takeawayRate.toFixed(2)} * ${takeawayQty}):</span>
+                <span>Takeaway Charges:</span>
                 <span>${currencySymbol}${takeawayCharge.toFixed(2)}</span>
               </div>
               ` : ''}
@@ -868,12 +917,16 @@ private static escapeHtml(str: string): string {
             ` : `
               ${saleData.payments && Array.isArray(saleData.payments) && saleData.payments.length > 0 ? `
                 <div style="font-weight: bold; border-top: 1px dashed #ccc; margin-top: 2mm; padding-top: 2mm; font-size: 10px; text-align: left; text-transform: uppercase; margin-bottom: 1.5mm;">PAYMENT DETAILS</div>
-                ${saleData.payments.map((p: any) => `
+                ${saleData.payments.map((p: any) => {
+                  let mode = String(p.payMode || p.payModeName || p.Remarks || 'Payment').toUpperCase();
+                  if (mode.trim() === "FOC") mode = "FOC (DISCOUNT)";
+                  return `
                   <div class="payment-row" style="font-size: 10px; font-weight: 700; display: flex; justify-content: space-between;">
-                    <span>${String(p.payMode || p.payModeName || p.Remarks || 'Payment').toUpperCase()}</span>
+                    <span>${mode}</span>
                     <span>${currencySymbol}${parseFloat(p.amount).toFixed(2)}</span>
                   </div>
-                `).join('')}
+                  `;
+                }).join('')}
               ` : `
                 <div class="payment-row">
                   <span>PAYMENT:</span>
@@ -914,7 +967,7 @@ private static escapeHtml(str: string): string {
             ` : `
               <div class="thankyou">THANK YOU! COME AGAIN!</div>
             `}
-            <div class="copyright">SMART-POS BY UNIPROSG</div>
+            <div class="copyright">SMART-CAFE BY UNIPROSG</div>
           </div>
           </div>
         </div>

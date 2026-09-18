@@ -26,6 +26,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useToast } from "../components/Toast";
 import { Fonts } from "../constants/Fonts";
 import { Theme } from "../constants/theme";
+import WindowControls from "../components/WindowControls";
 
 import { useAuthStore } from "@/stores/authStore";
 import CancelOrderModal from "../components/CancelOrderModal";
@@ -568,15 +569,39 @@ export default function SummaryScreen() {
   const closeActiveOrder = useActiveOrdersStore((s: any) => s.closeActiveOrder);
   const activeOrders = useActiveOrdersStore((s: any) => s.activeOrders);
   
+  const [activeSessions, setActiveSessions] = useState<any[]>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+
+  const fetchActiveSessions = async () => {
+    try {
+      setIsLoadingSessions(true);
+      const token = useAuthStore.getState().token;
+      const res = await fetch(`${API_URL}/api/orders/active-sessions`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (res.ok) {
+        const result = await res.json();
+        const sessions = result.orders || (Array.isArray(result) ? result : []);
+        setActiveSessions(sessions);
+      }
+    } catch (err) {
+      console.error("Failed to fetch active sessions:", err);
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  };
+
   const selectedTablesText = useMemo(() => {
     return selectedMergeOrderIds
       .map((id) => {
-        const order = activeOrders.find((o: any) => o.orderId === id);
+        const order = activeSessions.find((o: any) => o.orderId === id);
         return order ? `Table ${order.context?.tableNo}` : "";
       })
       .filter(Boolean)
       .join(", ");
-  }, [selectedMergeOrderIds, activeOrders]);
+  }, [selectedMergeOrderIds, activeSessions]);
 
   const toggleMergeSelection = (orderId: string) => {
     setSelectedMergeOrderIds((prev) =>
@@ -596,19 +621,26 @@ export default function SummaryScreen() {
       }
 
       // Retrieve source table details for all selected order IDs
-      const sourceTables = selectedMergeOrderIds
+      const sourceOrders = selectedMergeOrderIds
         .map((id) => {
-          const order = activeOrders.find((o: any) => o.orderId === id);
-          return order ? order.context : null;
+          const order = activeSessions.find((o: any) => o.orderId === id);
+          if (!order || !order.context?.tableId) return null;
+          return {
+            tableId: order.context.tableId,
+            orderNumber: id, // id is the OrderNumber string from active-kitchen
+            tableNo: order.context.tableNo,
+            section: order.context.section,
+          };
         })
-        .filter((c): c is any => c !== null && c.tableId !== undefined);
+        .filter((s): s is NonNullable<typeof s> => s !== null);
 
-      if (sourceTables.length === 0) {
+      if (sourceOrders.length === 0) {
         showToast({ type: "error", message: "No valid source tables selected" });
         return;
       }
 
-      const sourceTableIds = sourceTables.map((t) => t.tableId);
+      const sourceTables = sourceOrders.map((s) => ({ tableId: s.tableId, tableNo: s.tableNo, section: s.section }));
+      const sourceTableIds = sourceOrders.map((s) => s.tableId);
 
       const res = await fetch(`${API_URL}/api/orders/merge`, {
         method: "POST",
@@ -616,6 +648,7 @@ export default function SummaryScreen() {
         body: JSON.stringify({
           targetTableId: context.tableId,
           sourceTableIds: sourceTableIds,
+          sourceOrders: sourceOrders, // Pass order numbers for reliable GUID lookup
           userId: user?.id,
         }),
       });
@@ -890,6 +923,42 @@ export default function SummaryScreen() {
     setShowVoidModal(true);
   };
 
+  const handleItemClick = (item: any) => {
+    if (item.status === "VOIDED" || item.isVoided) return;
+    if (Platform.OS === 'web') {
+      const confirmFoc = window.confirm(item.isFoc ? `Remove FOC (Free of Cost) status for ${item.name}?` : `Mark ${item.name} as FOC (Free of Cost)?`);
+      if (confirmFoc) {
+        const nextFoc = !item.isFoc;
+        useCartStore.getState().updateCartItemFull(item.lineItemId, { isFoc: nextFoc });
+        showToast({
+          type: "success",
+          message: nextFoc ? "Item Marked FOC" : "FOC Removed",
+          subtitle: nextFoc ? `${item.name} is now FOC` : `${item.name} is no longer FOC`
+        });
+      }
+      return;
+    }
+    Alert.alert(
+      item.name,
+      item.isFoc ? "Remove FOC (Free of Cost) status?" : "Mark this item as FOC (Free of Cost)?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: item.isFoc ? "Remove FOC" : "Mark FOC", 
+          onPress: () => {
+            const nextFoc = !item.isFoc;
+            useCartStore.getState().updateCartItemFull(item.lineItemId, { isFoc: nextFoc });
+            showToast({
+              type: "success",
+              message: nextFoc ? "Item Marked FOC" : "FOC Removed",
+              subtitle: nextFoc ? `${item.name} is now FOC` : `${item.name} is no longer FOC`
+            });
+          } 
+        }
+      ]
+    );
+  };
+
   const handleSplitBill = () => {
     // Reset split quantities to 0 for all items in cart
     const initialSplit: Record<string, number> = {};
@@ -906,7 +975,7 @@ export default function SummaryScreen() {
   };
 
   const handleMergeBill = () => {
-    useActiveOrdersStore.getState().fetchActiveKitchenOrders();
+    fetchActiveSessions();
     setSelectedMergeOrderIds([]);
     setShowMergeModal(true);
     setShowBillOptions(false);
@@ -951,11 +1020,19 @@ export default function SummaryScreen() {
     if (!cart.length) return;
     
     try {
+      const fullDiscountInfo = discountInfo?.applied ? {
+        ...discountInfo,
+        amount: discountInfo.amount || discountAmount,
+      } : undefined;
+
       const saleData = {
         items: cart,
         total: grandTotal,
         subtotal: subtotal,
-        discount: discountInfo,
+        discount: fullDiscountInfo,
+        discountAmount: discountAmount,
+        discountType: discountInfo?.type,
+        discountValue: discountInfo?.value,
         orderId: displayOrderId,
         tableNo: context?.tableNo,
         waiterName: context?.serverName,
@@ -970,7 +1047,7 @@ export default function SummaryScreen() {
       await UniversalPrinter.printCheckoutBill(
         saleData,
         user?.userId || "SYSTEM",
-        discountInfo,
+        fullDiscountInfo,
       );
 
       showToast({
@@ -1210,8 +1287,11 @@ export default function SummaryScreen() {
 
   const takeawayCharges = settings.takeawayCharges || 0;
 
-  const { grossTotal, totalItemDiscount, scEligibleSubtotal, calcTakeawayChargeAmt, takeawayQty } = useMemo(() => {
-    return finalItems.reduce((acc: any, item: any) => {
+  const { grossTotal, totalItemDiscount, totalFocAmount, scEligibleSubtotal, calcTakeawayChargeAmt, takeawayQty, hasMixedTWCharges, singleTWRate } = useMemo(() => {
+    let firstRate: number | null = null;
+    let mixed = false;
+
+    const reduced = finalItems.reduce((acc: any, item: any) => {
       const isVoided = (item as any).status === "VOIDED";
       if (isVoided) return acc;
       
@@ -1231,18 +1311,38 @@ export default function SummaryScreen() {
       }
 
       const itemSubtotal = baseTotal - itemDiscount;
+      const itemFocAmount = item.isFoc ? itemSubtotal : 0;
       const isTakeawayItem = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway || (item as any).isTakeaway === true || (item as any).IsTakeaway === true || String((item as any).isTakeaway) === "1" || String((item as any).IsTakeaway) === "1";
       const isSC = !isTakeawayItem && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true || Number(item.IsServiceCharge) === 1 || item.IsServiceCharge === true);
-      const itemTWCharge = isTakeawayItem ? item.qty * takeawayCharges : 0;
+      
+      let itemTWCharge = 0;
+      if (isTakeawayItem) {
+        const dishSpecificTW = Number(item.takeawayCharge ?? item.TakeawayCharge ?? 0);
+        const effectiveTWRate = dishSpecificTW > 0 ? dishSpecificTW : takeawayCharges;
+        itemTWCharge = item.qty * effectiveTWRate;
+
+        if (firstRate === null) {
+          firstRate = effectiveTWRate;
+        } else if (firstRate !== effectiveTWRate) {
+          mixed = true;
+        }
+      }
 
       return {
         grossTotal: acc.grossTotal + baseTotal,
         totalItemDiscount: acc.totalItemDiscount + itemDiscount,
-        scEligibleSubtotal: acc.scEligibleSubtotal + (isSC ? itemSubtotal : 0),
-        calcTakeawayChargeAmt: acc.calcTakeawayChargeAmt + itemTWCharge,
-        takeawayQty: acc.takeawayQty + (isTakeawayItem ? item.qty : 0),
+        totalFocAmount: acc.totalFocAmount + itemFocAmount,
+        scEligibleSubtotal: acc.scEligibleSubtotal + (isSC && !item.isFoc ? itemSubtotal : 0),
+        calcTakeawayChargeAmt: acc.calcTakeawayChargeAmt + (isTakeawayItem && !item.isFoc ? itemTWCharge : 0),
+        takeawayQty: acc.takeawayQty + (isTakeawayItem && !item.isFoc ? item.qty : 0),
       };
-    }, { grossTotal: 0, totalItemDiscount: 0, scEligibleSubtotal: 0, calcTakeawayChargeAmt: 0, takeawayQty: 0 });
+    }, { grossTotal: 0, totalItemDiscount: 0, totalFocAmount: 0, scEligibleSubtotal: 0, calcTakeawayChargeAmt: 0, takeawayQty: 0 });
+
+    return {
+      ...reduced,
+      hasMixedTWCharges: mixed,
+      singleTWRate: firstRate !== null ? firstRate : takeawayCharges
+    };
   }, [finalItems, takeawayCharges]);
 
   const subtotal = useMemo(() => grossTotal - totalItemDiscount, [grossTotal, totalItemDiscount]);
@@ -1261,22 +1361,24 @@ export default function SummaryScreen() {
     return Math.min(discountInfo.value, subtotal);
   }, [discountInfo, subtotal]);
 
-  const netAfterDiscount = useMemo(() => subtotal - discountAmount, [subtotal, discountAmount]);
+  const netAfterDiscount = useMemo(() => Math.max(0, subtotal - discountAmount - totalFocAmount), [subtotal, discountAmount, totalFocAmount]);
 
   // Pro-rate the bill-level discount to service-charge-eligible items
   const scEligibleNet = useMemo(() => {
-    if (subtotal <= 0) return 0;
-    const proportion = scEligibleSubtotal / subtotal;
+    const payableSubtotal = Math.max(0, subtotal - totalFocAmount);
+    if (payableSubtotal <= 0) return 0;
+    const proportion = scEligibleSubtotal / payableSubtotal;
     return Math.max(0, scEligibleSubtotal - proportion * discountAmount);
-  }, [scEligibleSubtotal, subtotal, discountAmount]);
+  }, [scEligibleSubtotal, subtotal, totalFocAmount, discountAmount]);
 
   const billDiscountProportion = useMemo(() => {
     if (!discountInfo?.applied) return 0;
     if (discountInfo.type === "percentage") {
       return discountInfo.value / 100;
     }
-    return subtotal > 0 ? (discountAmount / subtotal) : 0;
-  }, [discountInfo, subtotal, discountAmount]);
+    const payableSubtotal = Math.max(0, subtotal - totalFocAmount);
+    return payableSubtotal > 0 ? (discountAmount / payableSubtotal) : 0;
+  }, [discountInfo, subtotal, totalFocAmount, discountAmount]);
 
   const currentTakeawayCharge = useMemo(() => {
     if (!takeawayChargeApplied) return 0;
@@ -1524,24 +1626,20 @@ export default function SummaryScreen() {
               flexDirection: "column",
               alignItems: "stretch",
               minHeight: undefined,
-              gap: 8,
-              paddingBottom: 10,
+              gap: 2,
+              paddingBottom: 4,
             },
           ]}
         >
           {isPhone && !isLandscape ? (
             // MOBILE PORTRAIT LAYOUT
             <>
-              {/* Row 1: Back Button + Title + Actions */}
+              {/* Row 1: Back Button + Title + Home/Minimize */}
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
                 <View style={{ flexDirection: "row", alignItems: "center" }}>
                   <Pressable
                     style={styles.iconBtn}
-                    onPress={() =>
-                      router.canGoBack()
-                        ? router.back()
-                        : router.replace("/(tabs)/category")
-                    }
+                    onPress={() => router.replace("/menu/thai_kitchen")}
                   >
                     <Ionicons name="arrow-back" size={24} color={Theme.textPrimary} />
                   </Pressable>
@@ -1549,52 +1647,64 @@ export default function SummaryScreen() {
                 </View>
 
                 {/* Actions Row */}
-                <View style={[styles.headerRight, { gap: 6 }]}>
-                  {headerActions}
+                <View style={{ marginRight: 6 }}>
+                  <WindowControls buttonStyle={{ height: 38, width: 38, borderRadius: 8 }} iconSize={20} />
                 </View>
               </View>
 
-              {/* Row 2: Badges + Order ID */}
-              <View
-                style={[
-                  styles.orderBadgeRow,
-                  { marginTop: 4, paddingLeft: 59, flexWrap: "wrap" },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.typeBadge,
-                    {
-                      backgroundColor:
-                        context.orderType === "DINE_IN"
-                          ? Theme.primaryLight
-                          : Theme.warningBg,
-                    },
-                  ]}
-                >
-                  <Text
+              {/* Row 2: Badges (Fixed Left) + Action Buttons (Scrollable Right) */}
+              <View style={{ flexDirection: "row", alignItems: "center", paddingLeft: 0, paddingRight: 12, marginTop: 2, width: "100%" }}>
+                {/* Fixed badges */}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <View
                     style={[
-                      styles.typeBadgeText,
+                      styles.typeBadge,
                       {
-                        color:
+                        backgroundColor:
                           context.orderType === "DINE_IN"
-                            ? Theme.primary
-                            : Theme.warning,
+                            ? Theme.primaryLight
+                            : Theme.warningBg,
                       },
                     ]}
                   >
-                    {context.orderType === "DINE_IN" ? "DINE-IN" : "TAKEAWAY"}
-                  </Text>
-                </View>
-                {context.orderType === "DINE_IN" && (
-                  <View style={styles.tableBadge}>
-                    <Text style={styles.tableBadgeText}>
-                      {formatSection(context.section || "")} • T
-                      {context.tableNo}
+                    <Text
+                      style={[
+                        styles.typeBadgeText,
+                        {
+                          color:
+                            context.orderType === "DINE_IN"
+                              ? Theme.primary
+                              : Theme.warning,
+                        },
+                      ]}
+                    >
+                      {context.orderType === "DINE_IN" ? "DINE-IN" : "TAKEAWAY"}
                     </Text>
                   </View>
-                )}
-                <Text style={[styles.orderSub, { marginLeft: 8 }]}>
+                  {context.orderType === "DINE_IN" && (
+                    <View style={styles.tableBadge}>
+                      <Text style={styles.tableBadgeText}>
+                        {formatSection(context.section || "")} • T
+                        {context.tableNo}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Scrollable Action Buttons */}
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ gap: 8, alignItems: "center", paddingLeft: 8 }}
+                  style={{ flex: 1 }}
+                >
+                  {headerActions}
+                </ScrollView>
+              </View>
+
+              {/* Row 3: Order ID */}
+              <View style={{ paddingLeft: 0, marginTop: 0 }}>
+                <Text style={[styles.orderSub, { marginLeft: 0 }]}>
                   #{displayOrderId || "NEW"}
                 </Text>
               </View>
@@ -1605,23 +1715,16 @@ export default function SummaryScreen() {
               <View style={styles.headerLeft}>
                 <Pressable
                   style={styles.iconBtn}
-                  onPress={() =>
-                    router.canGoBack()
-                      ? router.back()
-                      : router.replace("/(tabs)/category")
-                  }
+                  onPress={() => router.replace("/menu/thai_kitchen")}
                 >
                   <Ionicons name="arrow-back" size={24} color={Theme.textPrimary} />
                 </Pressable>
 
                 <View style={styles.headerTitleContainer}>
                   <Text style={styles.title}>Summary</Text>
-                  <View
-                    style={[
-                      styles.orderBadgeRow,
-                      { flexWrap: "wrap", marginTop: 0 },
-                    ]}
-                  >
+                  
+                  {/* Badges line */}
+                  <View style={[styles.orderBadgeRow, { flexWrap: "wrap", marginTop: 4 }]}>
                     <View
                       style={[
                         styles.typeBadge,
@@ -1655,20 +1758,18 @@ export default function SummaryScreen() {
                         </Text>
                       </View>
                     )}
-                    <Text
-                      style={[
-                        styles.orderSub,
-                        { marginLeft: 8 },
-                      ]}
-                    >
-                      #{displayOrderId || "NEW"}
-                    </Text>
                   </View>
+
+                  {/* Order ID line */}
+                  <Text style={[styles.orderSub, { marginTop: 4, marginLeft: 8 }]}>
+                    #{displayOrderId || "NEW"}
+                  </Text>
                 </View>
               </View>
 
-              <View style={styles.headerRight}>
+              <View style={[styles.headerRight, { gap: 8 }]}>
                 {headerActions}
+                <WindowControls buttonStyle={{ height: 46, width: 46, borderRadius: 10, backgroundColor: Theme.bgCard, borderWidth: 1, borderColor: Theme.border, justifyContent: "center", alignItems: "center" }} iconSize={24} />
               </View>
             </>
           )}
@@ -1698,22 +1799,24 @@ export default function SummaryScreen() {
               windowSize={5}
               removeClippedSubviews={true}
               renderItem={({ item }: { item: any }) => {
-                const isTakeawayItem = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway;
+                const isTakeawayItem = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway || (item as any).isTakeaway === true || (item as any).IsTakeaway === true || String((item as any).isTakeaway) === "1" || String((item as any).IsTakeaway) === "1";
                 const isSC = !isTakeawayItem && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true) && useGeneralSettingsStore.getState().settings.SVCIdentification !== false;
                 return (
-                  <View style={[
-                    styles.row,
-                    isSC && {
-                      borderWidth: 1.5,
-                      borderColor: Theme.dangerBorder,
-                      borderLeftColor: Theme.danger,
-                      backgroundColor: Theme.dangerBg,
-                    }
-                  ]}>
+                  <View
+                    style={[
+                      styles.row,
+                      isSC && {
+                        borderWidth: 1.5,
+                        borderColor: Theme.dangerBorder,
+                        borderLeftColor: Theme.danger,
+                        backgroundColor: Theme.dangerBg,
+                      }
+                    ]}
+                  >
                   <View style={styles.qtyBadge}>
                     <Text style={styles.qtyBadgeText}>{formatQty(item.qty)}</Text>
                   </View>
-
+ 
                   <View style={styles.rowContent}>
                     <Text
                       style={[
@@ -1723,7 +1826,9 @@ export default function SummaryScreen() {
                       numberOfLines={2}
                     >
                       {item.name}
+                      {isTakeawayItem && " (Takeaway 🛍️)"}
                       {item.isDishReward && " (Loyalty Reward 🎁)"}
+                      {item.isFoc && " (FOC 🎁)"}
                       {(item as any).status === "VOIDED" && " (VOIDED)"}
                     </Text>
                     {(item.spicy && item.spicy !== "Medium") ||
@@ -1792,17 +1897,32 @@ export default function SummaryScreen() {
                         })().toFixed(2)}
                       </Text>
                     )}
+                    {!item.isFoc && item.status !== "VOIDED" && (() => {
+                      const isCombo = item.isCombo === true || String(item.isCombo) === "1" || item.isCombo === 1;
+                      const discountBasis = isCombo ? (item.basePrice ?? item.price ?? 0) : (item.price ?? 0);
+                      const discAmt = Number(item.discountAmount ?? item.discount ?? 0);
+                      if (discAmt <= 0) return null;
+                      const isFixed = item.discountType === 'fixed' || (item.discountType == null && item.discountAmount > 0 && !item.discount);
+                      const savedAmt = isFixed
+                        ? Math.min(discAmt, discountBasis) * item.qty
+                        : (discountBasis * (discAmt / 100)) * item.qty;
+                      return (
+                        <Text style={[styles.sub, { color: Theme.danger, fontFamily: Fonts.bold, marginTop: 2 }]}>
+                          Item Discount ({isFixed ? `${currencySymbol}${discAmt.toFixed(2)}` : `${discAmt}%`}): -{currencySymbol}{savedAmt.toFixed(2)}
+                        </Text>
+                      );
+                    })()}
                   </View>
 
                   <View style={[styles.priceBlock, { alignItems: 'flex-end', justifyContent: 'center' }]}>
-                    {(Number(item.discountAmount ?? item.discount ?? 0)) > 0 && (
+                    {(item.isFoc || (Number(item.discountAmount ?? item.discount ?? 0)) > 0) && (
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                         <Text style={[styles.price, { fontSize: 13, textDecorationLine: "line-through", color: Theme.textMuted }]}>
                           {currencySymbol}{((item.price || 0) * item.qty).toFixed(2)}
                         </Text>
-                        <View style={{ backgroundColor: (Theme as any).successBg || '#dcfce7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                          <Text style={{ color: Theme.success || '#16a34a', fontSize: 11, fontFamily: Fonts.bold }}>
-                            {(() => {
+                        <View style={{ backgroundColor: item.isFoc ? '#dbeafe' : ((Theme as any).successBg || '#dcfce7'), paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                          <Text style={{ color: item.isFoc ? '#2563eb' : (Theme.success || '#16a34a'), fontSize: 11, fontFamily: Fonts.bold }}>
+                            {item.isFoc ? "FOC" : (() => {
                               const isCombo = item.isCombo === true || String(item.isCombo) === "1" || item.isCombo === 1;
                               const discountBasis = isCombo ? (item.basePrice ?? item.price ?? 0) : (item.price ?? 0);
                               const rawDiscAmt = Number(item.discountAmount ?? item.discount ?? 0);
@@ -1825,7 +1945,7 @@ export default function SummaryScreen() {
                       ]}
                     >
                       {currencySymbol}
-                      {(() => {
+                      {item.isFoc ? "0.00" : (() => {
                         const isCombo = item.isCombo === true || String(item.isCombo) === "1" || item.isCombo === 1;
                         const discountBasis = isCombo ? (item.basePrice ?? item.price ?? 0) : (item.price ?? 0);
                         const discAmt = Number(item.discountAmount ?? item.discount ?? 0);
@@ -2089,36 +2209,74 @@ export default function SummaryScreen() {
                   </Text>
                 </View>
 
-                {(discountAmount + totalItemDiscount) > 0 && (
-                  <>
-                    <View
+                {totalItemDiscount > 0 && (
+                  <View
+                    style={[
+                      styles.summaryRow,
+                      ((isLandscape && !isTablet) ||
+                        (isPhone && !isLandscape)) && { marginBottom: 6 },
+                    ]}
+                  >
+                    <Text
                       style={[
-                        styles.summaryRow,
-                        ((isLandscape && !isTablet) ||
-                          (isPhone && !isLandscape)) && { marginBottom: 6 },
+                        styles.summaryLabel,
+                        { color: Theme.danger },
+                        isPhone && !isLandscape && { fontSize: 13 },
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.summaryLabel,
-                          { color: Theme.danger },
-                          isPhone && !isLandscape && { fontSize: 13 },
-                        ]}
-                      >
-                        {discountInfo?.label || (discountInfo?.applied ? "Discount" : "Discount")}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.summaryValue,
-                          { color: Theme.danger },
-                          isPhone && !isLandscape && { fontSize: 13 },
-                        ]}
-                      >
-                        -{currencySymbol}
-                        {(discountAmount + totalItemDiscount).toFixed(2)}
-                      </Text>
-                    </View>
+                      Item Discounts
+                    </Text>
+                    <Text
+                      style={[
+                        styles.summaryValue,
+                        { color: Theme.danger },
+                        isPhone && !isLandscape && { fontSize: 13 },
+                      ]}
+                    >
+                      -{currencySymbol}
+                      {totalItemDiscount.toFixed(2)}
+                    </Text>
+                  </View>
+                )}
 
+                {discountAmount > 0 && (
+                  <View
+                    style={[
+                      styles.summaryRow,
+                      ((isLandscape && !isTablet) ||
+                        (isPhone && !isLandscape)) && { marginBottom: 6 },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.summaryLabel,
+                        { color: Theme.danger },
+                        isPhone && !isLandscape && { fontSize: 13 },
+                      ]}
+                    >
+                      {discountInfo?.type === "percentage"
+                        ? `Whole Bill Discount (${discountInfo.value}%)`
+                        : discountInfo?.type === "fixed"
+                        ? `Whole Bill Discount (-${currencySymbol}${discountInfo.value})`
+                        : discountInfo?.label
+                        ? `Whole Bill Discount (${discountInfo.label})`
+                        : "Whole Bill Discount"}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.summaryValue,
+                        { color: Theme.danger },
+                        isPhone && !isLandscape && { fontSize: 13 },
+                      ]}
+                    >
+                      -{currencySymbol}
+                      {discountAmount.toFixed(2)}
+                    </Text>
+                  </View>
+                )}
+
+                {(discountAmount > 0 || totalItemDiscount > 0) && (
+                  <>
                     <View
                       style={[
                         styles.dashedDivider,
@@ -2201,7 +2359,7 @@ export default function SummaryScreen() {
                         isPhone && !isLandscape && { fontSize: 13 },
                       ]}
                     >
-                      Takeaway Charges ({currencySymbol}{takeawayCharges.toFixed(2)} * {takeawayQty})
+                      Takeaway Charges
                     </Text>
                     <Text
                       style={[
@@ -3126,27 +3284,7 @@ export default function SummaryScreen() {
                     <Text style={styles.billOptionText}>Merge Bill</Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={styles.billOptionItem}
-                    onPress={() => {
-                      setShowBillOptions(false);
-                      handleFOC();
-                    }}
-                  >
-                    <View
-                      style={[
-                        styles.billOptionIcon,
-                        { backgroundColor: Theme.warningBg },
-                      ]}
-                    >
-                      <Ionicons
-                        name="gift-outline"
-                        size={20}
-                        color={Theme.warning}
-                      />
-                    </View>
-                    <Text style={styles.billOptionText}>FOC</Text>
-                  </TouchableOpacity>
+
 
 
                   <TouchableOpacity
@@ -3708,13 +3846,14 @@ export default function SummaryScreen() {
 
             <FlatList
               style={{ flexShrink: 1, marginBottom: 15 }}
-              data={activeOrders.filter(
+              data={activeSessions.filter(
                 (o: any) => 
                   o.context?.orderType === "DINE_IN" && 
                   o.context?.tableId && 
                   String(o.context.tableId).replace(/^\{|\}$/g, "").trim().toLowerCase() !== 
                   String(context?.tableId || "").replace(/^\{|\}$/g, "").trim().toLowerCase()
               )}
+              extraData={[selectedMergeOrderIds, activeSessions]}
               keyExtractor={(item) => item.orderId}
               renderItem={({ item }) => {
                 const isSelected = selectedMergeOrderIds.includes(item.orderId);
@@ -4236,7 +4375,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     minHeight: 60,
-    paddingVertical: 6,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: Theme.border,
     marginBottom: 5,

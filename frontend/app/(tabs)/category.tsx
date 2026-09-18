@@ -1,14 +1,16 @@
 import CalendarPicker from "@/components/CalendarPicker";
+import { socket } from "@/constants/socket";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { API_URL } from "@/constants/Config";
 import { Fonts } from "@/constants/Fonts";
 import { Theme } from "@/constants/theme";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -22,6 +24,9 @@ import {
   TouchableWithoutFeedback,
   useWindowDimensions,
   View,
+  Animated,
+  Easing,
+  ImageBackground,
 } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 import {
@@ -29,16 +34,17 @@ import {
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { useToast } from "../../components/Toast";
+import WindowControls from "../../components/WindowControls";
+import { FloorPlanTable } from "@/components/FloorPlanTable";
 import {
   formatToSingaporeTime,
   getSingaporeDateString,
   parseDatabaseDate,
 } from "../../utils/timezoneHelper";
 
-import StoreSettingsModal from "@/components/payment/StoreSettingsModal";
 import AvatarPickerModal from "@/components/AvatarPickerModal";
+import StoreSettingsModal from "@/components/payment/StoreSettingsModal";
 import { getAvatarSource } from "@/constants/avatars";
-import { Image } from "expo-image";
 import { useActiveOrdersStore } from "@/stores/activeOrdersStore";
 import { useAuthStore } from "@/stores/authStore";
 import {
@@ -50,13 +56,15 @@ import {
 } from "@/stores/cartStore";
 import { useGeneralSettingsStore } from "@/stores/generalSettingsStore";
 import { getHeldOrders } from "@/stores/heldOrdersStore";
-import { OrderContext, setOrderContext } from "@/stores/orderContextStore";
+import { useNotificationStore } from "@/stores/notificationStore";
+import { clearOrderContext, OrderContext, setOrderContext } from "@/stores/orderContextStore";
 import { usePaymentSettingsStore } from "@/stores/paymentSettingsStore";
+import { Image } from "expo-image";
 import {
   TableStatusType,
   useTableStatusStore,
 } from "../../stores/tableStatusStore";
-import { useNotificationStore } from "@/stores/notificationStore";
+import { useTerminalPaymentStore } from "../../stores/terminalPaymentStore";
 
 // --- MOBILE SOLID COLORS ---
 const SOLID_LIGHT_GREEN = "#F0FDF4";
@@ -66,6 +74,343 @@ const SOLID_LIGHT_RED = "#FEF2F2";
 const SOLID_LIGHT_BLUE = "#F0F9FF";
 const SOLID_LIGHT_AMBER = "#FFFBEB";
 const SOLID_LIGHT_VIOLET = "#F5F3FF";
+
+const woodFloorTexture = require("../../assets/images/wood_floor_texture.jpg");
+
+// --- CANVAS BACKGROUND COMPONENT ---
+// --- CANVAS BACKGROUND COMPONENT ---
+const CanvasBackground = ({ theme, children, style, isCategory = true }: { theme: string; children: React.ReactNode; style: any; isCategory?: boolean }) => {
+  if (theme === "cloud_nine") {
+    return (
+      <View style={[{ backgroundColor: "#faf8f2", position: "relative", overflow: "hidden" }, style]}>
+        {Platform.OS === "web" ? (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(ellipse 55% 45% at 30% 50%, rgba(253,186,116,0.6) 0%, transparent 60%)",
+                mixBlendMode: "normal",
+                filter: "blur(150px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(ellipse 45% 55% at 65% 40%, rgba(251,146,60,0.45) 0%, transparent 55%)",
+                mixBlendMode: "normal",
+                filter: "blur(163px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(ellipse 40% 35% at 50% 70%, rgba(254,215,170,0.5) 0%, transparent 50%)",
+                mixBlendMode: "normal",
+                filter: "blur(138px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+          </>
+        ) : (
+          <>
+            <LinearGradient
+              colors={["rgba(253,186,116,0.6)", "rgba(251,146,60,0.45)", "transparent"]}
+              locations={[0, 0.5, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+            <LinearGradient
+              colors={["transparent", "rgba(254,215,170,0.5)", "transparent"]}
+              locations={[0, 0.7, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          </>
+        )}
+        <View style={{ flex: 1, zIndex: 1 }}>{children}</View>
+      </View>
+    );
+  }
+
+  if (theme === "champagne_glass") {
+    return (
+      <View style={[{ backgroundColor: "#faf8f2", position: "relative", overflow: "hidden" }, style]}>
+        {Platform.OS === "web" ? (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "linear-gradient(135deg, rgba(255,251,235,0.95) 0%, rgba(254,243,199,0.62) 50%, rgba(253,230,138,0.34) 100%)",
+                mixBlendMode: "normal",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(ellipse 50% 45% at 32% 42%, rgba(251,191,36,0.26) 0%, transparent 68%)",
+                mixBlendMode: "multiply",
+                filter: "blur(125px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(ellipse 42% 50% at 72% 60%, rgba(245,158,11,0.20) 0%, transparent 70%)",
+                mixBlendMode: "multiply",
+                filter: "blur(138px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "linear-gradient(120deg, rgba(255,255,255,0.65), transparent 42%, rgba(255,255,255,0.30) 72%)",
+                mixBlendMode: "multiply",
+                filter: "blur(45px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+          </>
+        ) : (
+          <>
+            <LinearGradient
+              colors={["rgba(255,251,235,0.95)", "rgba(254,243,199,0.62)", "rgba(253,230,138,0.34)"]}
+              locations={[0, 0.5, 1.0]}
+              style={StyleSheet.absoluteFill}
+            />
+            <LinearGradient
+              colors={["rgba(251,191,36,0.26)", "transparent"]}
+              locations={[0, 0.68]}
+              style={StyleSheet.absoluteFill}
+            />
+            <LinearGradient
+              colors={["transparent", "rgba(245,158,11,0.20)"]}
+              locations={[0, 0.70]}
+              style={StyleSheet.absoluteFill}
+            />
+          </>
+        )}
+        <View style={{ flex: 1, zIndex: 1 }}>{children}</View>
+      </View>
+    );
+  }
+
+  if (theme === "champagne") {
+    return (
+      <View style={[{ backgroundColor: "#faf8f2", position: "relative", overflow: "hidden" }, style]}>
+        {Platform.OS === "web" ? (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "linear-gradient(145deg, #fffbeb 0%, #fef3c7 38%, #fde68a 68%, #fcd34d 100%)",
+                mixBlendMode: "normal",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(ellipse 55% 40% at 55% 38%, rgba(255,255,255,0.42) 0%, transparent 65%)",
+                mixBlendMode: "multiply",
+                filter: "blur(80px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                inset: 0,
+                mixBlendMode: "overlay",
+                opacity: 0.85,
+                pointerEvents: "none",
+              }}
+            >
+              <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+                <filter id="grain">
+                  <feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="4" stitchTiles="stitch" />
+                  <feColorMatrix
+                    type="matrix"
+                    values="0.181 0.608 0.061 0 0.075
+                          0.181 0.608 0.061 0 0.075
+                          0.181 0.608 0.061 0 0.075
+                          0     0     0     1 0"
+                  />
+                </filter>
+                <rect width="100%" height="100%" filter="url(#grain)" />
+              </svg>
+            </div>
+          </>
+        ) : (
+          <>
+            <LinearGradient
+              colors={["#fffbeb", "#fef3c7", "#fde68a", "#fcd34d"]}
+              locations={[0, 0.38, 0.68, 1.0]}
+              style={StyleSheet.absoluteFill}
+            />
+            <LinearGradient
+              colors={["rgba(255,255,255,0.42)", "transparent"]}
+              locations={[0, 0.65]}
+              style={StyleSheet.absoluteFill}
+            />
+          </>
+        )}
+        <View style={{ flex: 1, zIndex: 1 }}>{children}</View>
+      </View>
+    );
+  }
+
+  if (theme === "citrine") {
+    return (
+      <View style={[{ backgroundColor: "#faf8f2", position: "relative", overflow: "hidden" }, style]}>
+        {Platform.OS === "web" ? (
+          <>
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(circle at 22% 28%, rgba(250,204,21,0.6) 0%, transparent 45%)",
+                mixBlendMode: "normal",
+                filter: "blur(175px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(circle at 78% 32%, rgba(253,224,71,0.5) 0%, transparent 40%)",
+                mixBlendMode: "normal",
+                filter: "blur(200px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(circle at 50% 78%, rgba(234,179,8,0.4) 0%, transparent 50%)",
+                mixBlendMode: "normal",
+                filter: "blur(200px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "radial-gradient(circle at 85% 75%, rgba(202,138,4,0.3) 0%, transparent 35%)",
+                mixBlendMode: "multiply",
+                filter: "blur(138px)",
+                pointerEvents: "none",
+                transform: "translateZ(0)",
+              }}
+              aria-hidden="true"
+            />
+          </>
+        ) : (
+          <>
+            <LinearGradient
+              colors={["rgba(250,204,21,0.4)", "rgba(253,224,71,0.3)", "transparent"]}
+              locations={[0, 0.4, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+            <LinearGradient
+              colors={["transparent", "rgba(234,179,8,0.25)", "rgba(202,138,4,0.15)"]}
+              locations={[0, 0.7, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          </>
+        )}
+        <View style={{ flex: 1, zIndex: 1 }}>{children}</View>
+      </View>
+    );
+  }
+
+  // Default / champagne_fizz - Champagne Fizz
+  return (
+    <View style={[{ backgroundColor: "#faf8f2", position: "relative", overflow: "hidden" }, style]}>
+      {/* Layer 1 - Champagne Fizz Aura */}
+      <LinearGradient
+        colors={[
+          "transparent",
+          "rgba(255, 230, 180, 0.12)",
+          "rgba(255, 255, 255, 0.18)",
+          "rgba(255, 200, 140, 0.68)",
+          "rgba(230, 170, 100, 0.90)"
+        ]}
+        locations={[0, 0.28, 0.48, 0.68, 1.0]}
+        style={[
+          StyleSheet.absoluteFill,
+          Platform.OS === "web" ? {
+            mixBlendMode: "multiply",
+            filter: "blur(90px)",
+            transform: "translateZ(0)",
+          } as any : {}
+        ]}
+      />
+      {/* Layer 2 - Champagne Fizz Aura */}
+      <LinearGradient
+        colors={[
+          "transparent",
+          "rgba(255, 230, 180, 0.22)",
+          "rgba(255, 255, 255, 0.66)",
+          "rgba(255, 200, 140, 0.82)",
+          "rgba(230, 170, 100, 1.0)"
+        ]}
+        locations={[0, 0.34, 0.66, 0.82, 1.0]}
+        style={[
+          StyleSheet.absoluteFill,
+          Platform.OS === "web" ? {
+            mixBlendMode: "multiply",
+            filter: "blur(90px)",
+            transform: "translateZ(0)",
+          } as any : {}
+        ]}
+      />
+      {/* Content wrapper */}
+      <View style={{ flex: 1, zIndex: 1 }}>
+        {children}
+      </View>
+    </View>
+  );
+};
 
 const formatSectionGlobal = (sec: string) => {
   if (!sec) return "";
@@ -83,7 +428,7 @@ const getStatusUI = (status: number, diningSection?: number) => {
       }
       return { text: "DINING", color: "#22c55e", lightBg: "#F0FDF4" };
     case 2:
-      return { text: "CHECKOUT", color: "#fd7e14", lightBg: "#FFF7ED" };
+      return { text: "CHECKOUT", color: "#F59E0B", lightBg: "#FFFBEB" };
     case 3:
       return { text: "HOLD", color: "#3b82f6", lightBg: "#F0F9FF" };
     case 4:
@@ -92,8 +437,36 @@ const getStatusUI = (status: number, diningSection?: number) => {
       return { text: "RESERVED", color: "#ef4444", lightBg: "#FEF2F2" };
     case 0:
     default:
-      return { text: "AVAILABLE", color: "#94A3B8", lightBg: "transparent" }; // Gray
+      return { text: "AVAILABLE", color: "#C2A580", lightBg: "#FAF6F0" }; // Tan/Beige
   }
+};
+
+// --- ROTATING SYNC ICON COMPONENT ---
+const RotatingSyncIcon = ({ size = 16, color = "#3b82f6" }: { size?: number; color?: string }) => {
+  const spinValue = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const anim = Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 1500,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [spinValue]);
+
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
+  return (
+    <Animated.View style={{ transform: [{ rotate: spin }] }}>
+      <Ionicons name="sync" size={size} color={color} />
+    </Animated.View>
+  );
 };
 
 // --- MEMOIZED TABLE COMPONENT ---
@@ -107,6 +480,9 @@ const TableItemComponent = React.memo(
     numberFont,
     smallFont,
     isTabletPortrait,
+    isAbsoluteLayout,
+    layoutScale = 1,
+    backgroundTheme = "wood",
   }: {
     tableId: string;
     item: TableItem;
@@ -116,9 +492,17 @@ const TableItemComponent = React.memo(
     numberFont: number;
     smallFont: number;
     isTabletPortrait?: boolean;
+    isAbsoluteLayout?: boolean;
+    layoutScale?: number;
+    backgroundTheme?: string;
   }) => {
     // 🚀 O(1) Store Subscription: Only re-renders when THIS table changes
     const tableData = useTableStatusStore((state) => state.tableMap[tableId]);
+
+    // Subscribe to terminal payment session — re-renders only when this table's session changes
+    const terminalStatus = useTerminalPaymentStore(
+      (state) => state.sessions[tableId]?.status
+    );
 
     // 🚀 SYNC-FIRST: Prioritize real-time data from the global store
     const status = tableData
@@ -159,7 +543,7 @@ const TableItemComponent = React.memo(
 
     // 🌹 QR PAID: entryStatus='q' + paymentStatus=1 → Rose card + "Paid" label
     const rawEntryStatus =
-      tableData?.entryStatus !== undefined
+      (tableData?.entryStatus !== undefined && tableData?.entryStatus !== null)
         ? tableData.entryStatus
         : item.entryStatus;
     const rawPaymentStatus =
@@ -172,10 +556,21 @@ const TableItemComponent = React.memo(
       ui = { text: "PAID", color: "#f43f5e", lightBg: "#fff1f2" };
     }
 
-    const borderColor = status === 0 ? Theme.border : ui.color;
+    let borderColor = status === 0 ? Theme.border : ui.color;
+    let borderWidth = status !== 0 ? 2 : 1.5;
+
+    if (terminalStatus === "processing") {
+      borderColor = "#3b82f6";
+      borderWidth = 3;
+    } else if (terminalStatus === "failed" || terminalStatus === "cancelled") {
+      borderColor = "#ef4444";
+      borderWidth = 3;
+    }
+
     const bgColor = status !== 0 ? ui.lightBg : Theme.bgCard;
     const textColor = status === 0 ? Theme.textPrimary : ui.color;
-    const labelColor = Theme.textPrimary;
+    let labelColor = Theme.textPrimary;
+
 
     let timeText = "";
     if (rawStartTime && status !== 0 && status !== 5) {
@@ -186,122 +581,286 @@ const TableItemComponent = React.memo(
       });
     }
 
-    return (
-      <TouchableOpacity
-        activeOpacity={isPaid ? 1 : 0.8}
-        disabled={isPaid}
-        style={[
-          styles.tableBox,
-          {
-            width: itemSize,
-            height: itemSize,
-            borderColor,
-            backgroundColor: bgColor,
-            borderWidth: status !== 0 ? 2 : 1.5,
-            elevation: status !== 0 ? 0 : 2,
-            opacity: isPaid ? 0.92 : 1,
-          },
-        ]}
-        onPress={() => onPress(item, tableData)}
-      >
-        <View style={styles.tableContent}>
-          <Text
-            style={[
-              styles.tableNumber,
-              { fontSize: numberFont, color: labelColor },
-            ]}
-          >
-            {item.label}
-          </Text>
+    // Shape logic
+    const tableType = item.TableType ? String(item.TableType).trim().toLowerCase() : "rectangular";
+    const seatsCount = item.Seats !== undefined && item.Seats !== null ? Number(item.Seats) : 4;
+    const xSize = item.XSize !== undefined && item.XSize !== null && Number(item.XSize) > 0 ? Number(item.XSize) : 100;
+    const ySize = item.YSize !== undefined && item.YSize !== null && Number(item.YSize) > 0 ? Number(item.YSize) : 80;
 
-          {status !== 0 && (
-            <View style={styles.tableInfo}>
-              <View
-                style={[
-                  styles.statusChip,
-                  { backgroundColor: bgColor, borderColor: ui.color },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.statusChipText,
-                    { color: ui.color, fontSize: smallFont },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {tableData?.customerName ? tableData.customerName : ui.text}
-                </Text>
-              </View>
+    // Outer table size calculations (leaving space for chairs)
+    const maxTableDim = itemSize - 28; // Padding on all sides for chairs
+    const maxDimension = Math.max(xSize, ySize) || 100;
 
-              {status !== 0 && status !== 5 && (
-                <View style={styles.tableStats}>
-                  {timeText ? (
-                    <Text
-                      style={[
-                        styles.timeText,
-                        { fontSize: smallFont, color: textColor },
-                      ]}
-                    >
-                      <Ionicons
-                        name="time-outline"
-                        size={smallFont}
-                        color={textColor}
-                      />{" "}
-                      {timeText}
-                    </Text>
-                  ) : null}
-                  {billAmount > 0 && (
-                    <Text
-                      style={[
-                        styles.billText,
-                        {
-                          fontSize: smallFont + 2,
-                          color: textColor,
-                          fontWeight: "800",
-                        },
-                      ]}
-                    >
-                      ${billAmount.toFixed(2)}
-                    </Text>
-                  )}
-                </View>
-              )}
-            </View>
-          )}
+    let tableW = isAbsoluteLayout ? (xSize * 0.6) * layoutScale : Math.max(itemSize * 0.45, (xSize / maxDimension) * maxTableDim);
+    let tableH = isAbsoluteLayout ? (ySize * 0.6) * layoutScale : Math.max(itemSize * 0.45, (ySize / maxDimension) * maxTableDim);
 
-          {status === 5 && (
-            <View style={styles.lockedOverlay}>
-              <Ionicons
-                name="lock-closed"
-                size={Math.max(12, itemSize * 0.15)}
-                color={ui.color}
-              />
-              {tableData?.lockedByName ? (
-                <View
-                  style={{
-                    backgroundColor: ui.color,
-                    paddingHorizontal: 6,
-                    paddingVertical: 2,
-                    borderRadius: 4,
-                    marginTop: 2,
-                    marginBottom: 4,
-                  }}
-                >
-                  <Text
-                    style={{
-                      fontSize: smallFont - 1,
-                      color: "#FFF",
-                      fontWeight: "bold",
-                    }}
-                    numberOfLines={1}
-                  >
-                    {tableData.lockedByName}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          )}
+    let borderRadius = 8; // rectangular default
+    if (tableType === "square") {
+      const size = Math.max(tableW, tableH);
+      tableW = size;
+      tableH = size;
+      borderRadius = 8;
+    } else if (tableType === "round") {
+      const size = Math.max(tableW, tableH);
+      tableW = size;
+      tableH = size;
+      borderRadius = size / 2;
+    } else if (tableType === "oval") {
+      borderRadius = Math.min(tableW, tableH) / 2;
+    } else if (tableType === "rectangular") {
+      borderRadius = 8;
+    } else {
+      borderRadius = 12;
+    }
 
+    const tx = isAbsoluteLayout ? 0 : (itemSize - tableW) / 2;
+    const ty = isAbsoluteLayout ? 0 : (itemSize - tableH) / 2;
+    const cx = isAbsoluteLayout ? tableW / 2 : itemSize / 2;
+    const cy = isAbsoluteLayout ? tableH / 2 : itemSize / 2;
+
+    // Chair size — bigger base so they're clearly visible
+    let chairSize = Math.max(16, itemSize * 0.13);
+    if (seatsCount > 10) {
+      chairSize = Math.max(10, chairSize * (10 / seatsCount) * 1.4);
+    }
+
+    const offset = 5; // gap between table edge and chair
+    
+    // Override AVAILABLE colors for premium beige look matching reference
+    let activeColor = status === 0 ? "#D1C7BD" : ui.color;
+    let activeBg = status === 0 ? "#FAF8F5" : ui.lightBg;
+
+    if (backgroundTheme === "light") {
+      if (status === 0) {
+        activeColor = "#22C55E"; // Free -> clean emerald green
+        activeBg = "#FFFFFF";
+      } else if (isPaid) {
+        activeColor = "#F43F5E";
+        activeBg = "#FFFFFF";
+      } else {
+        const effectiveStatus = ((status === 1 || status === 3) && isOvertime) ? 4 : status;
+        switch (effectiveStatus) {
+          case 1: // Dining
+            activeColor = "#22C55E";
+            activeBg = "#FFFFFF";
+            break;
+          case 2: // Checkout
+            activeColor = "#F59E0B";
+            activeBg = "#FFFFFF";
+            break;
+          case 3: // Hold
+            activeColor = "#3B82F6";
+            activeBg = "#FFFFFF";
+            break;
+          case 4: // Overtime
+            activeColor = "#8B5CF6";
+            activeBg = "#FFFFFF";
+            break;
+          case 5: // Reserved
+            activeColor = "#3B82F6";
+            activeBg = "#FFFFFF";
+            break;
+        }
+      }
+    }
+    
+    // Label color mapping for high-readability text
+    if (backgroundTheme === "light") {
+      labelColor = "#000000";
+    } else if (status === 0) {
+      labelColor = "#000000";
+    } else if (isPaid) {
+      labelColor = "#9E1F4B";
+    } else {
+      switch (status) {
+        case 1: labelColor = "#1B5E20"; break; // Dark green
+        case 2: labelColor = "#B66000"; break; // Dark yellow/orange
+        case 3: labelColor = "#0D47A1"; break; // Dark blue
+        case 4:
+        case 5: labelColor = "#B71C1C"; break; // Dark red
+        default: labelColor = activeColor;
+      }
+    }
+
+    // Chair styling (white background with matching color border, top-down chair backrest design!)
+    const chairColor = status === 0 ? (backgroundTheme === "light" ? "#22C55E" : "#D1C7BD") : activeColor;
+    const chairBg = "#FFFFFF";
+
+    // Chair placement calculation
+    const chairPositions: { x: number; y: number; rotate?: string; backrestStyle?: any }[] = [];
+    if (seatsCount > 0) {
+      if (tableType === "round" || tableType === "oval") {
+        const rx = tableW / 2;
+        const ry = tableH / 2;
+        const radiusOffset = chairSize / 2 + offset;
+        for (let i = 0; i < seatsCount; i++) {
+          const angle = (i * 2 * Math.PI) / seatsCount - Math.PI / 2; // start from top
+          const x = cx + (rx + radiusOffset) * Math.cos(angle) - chairSize / 2;
+          const y = cy + (ry + radiusOffset) * Math.sin(angle) - chairSize / 2;
+          
+          // Rotation so backrest (top border) faces outwards
+          const rotationAngle = angle + Math.PI / 2;
+          chairPositions.push({ 
+            x, 
+            y, 
+            rotate: `${rotationAngle}rad`,
+            backrestStyle: { top: 0, left: 0, right: 0, height: 2.2, borderTopLeftRadius: 1.5, borderTopRightRadius: 1.5 }
+          });
+        }
+      } else {
+        // Rectangular / Square logic
+        let topCount = 0;
+        let bottomCount = 0;
+        let leftCount = 0;
+        let rightCount = 0;
+
+        if (seatsCount === 2) {
+          leftCount = 1;
+          rightCount = 1;
+        } else {
+          const base = Math.floor(seatsCount / 4);
+          const rem = seatsCount % 4;
+          topCount = base + (rem > 0 ? 1 : 0);
+          bottomCount = base + (rem > 1 ? 1 : 0);
+          leftCount = base + (rem > 2 ? 1 : 0);
+          rightCount = base;
+        }
+
+        // Top chairs — backrest faces UP (away from table), no rotation
+        for (let i = 0; i < topCount; i++) {
+          const x = tx + (i + 0.5) * (tableW / topCount) - chairSize / 2;
+          const y = ty - chairSize - offset;
+          chairPositions.push({ x, y });
+        }
+        // Bottom chairs — backrest faces DOWN (away from table)
+        for (let i = 0; i < bottomCount; i++) {
+          const x = tx + (i + 0.5) * (tableW / bottomCount) - chairSize / 2;
+          const y = ty + tableH + offset;
+          chairPositions.push({ x, y, rotate: '180deg' });
+        }
+        // Left chairs — backrest faces LEFT (away from table)
+        for (let i = 0; i < leftCount; i++) {
+          const x = tx - chairSize - offset;
+          const y = ty + (i + 0.5) * (tableH / leftCount) - chairSize / 2;
+          chairPositions.push({ x, y, rotate: '-90deg' });
+        }
+        // Right chairs — backrest faces RIGHT (away from table)
+        for (let i = 0; i < rightCount; i++) {
+          const x = tx + tableW + offset;
+          const y = ty + (i + 0.5) * (tableH / rightCount) - chairSize / 2;
+          chairPositions.push({ x, y, rotate: '90deg' });
+        }
+      }
+    }
+
+    // Dynamic color gradient for the table body
+    let gradientColors: [string, string] = ["#FFFFFF", "#FFFFFF"];
+    let tableBorderColor = activeColor;
+    if (backgroundTheme === "light") {
+      gradientColors = ["#FFFFFF", "#FFFFFF"];
+      tableBorderColor = activeColor;
+    } else if (status === 0) {
+      gradientColors = ["#FAF8F5", "#F0EAE1"]; // Subtle blonde-wood / warm linen look
+      tableBorderColor = "#D1C7BD";
+    } else if (isPaid) {
+      gradientColors = ["#FFF1F2", "#FFE4E6"];
+      tableBorderColor = "#FDA4AF";
+    } else {
+      const effectiveStatus = ((status === 1 || status === 3) && isOvertime) ? 4 : status;
+      switch (effectiveStatus) {
+        case 1: // Dining (Subtle Green)
+          gradientColors = ["#F0FDF4", "#DCFCE7"];
+          tableBorderColor = "#22c55e";
+          break;
+        case 2: // Checkout (Subtle Yellow/Amber)
+          gradientColors = ["#FFFBEB", "#FEF3C7"];
+          tableBorderColor = "#F59E0B";
+          break;
+        case 3: // Hold (Subtle Blue)
+          gradientColors = ["#F0F9FF", "#E0F2FE"];
+          tableBorderColor = "#3b82f6";
+          break;
+        case 4: // Overtime (Subtle Purple)
+          gradientColors = ["#F5F3FF", "#EDE9FE"];
+          tableBorderColor = "#8b5cf6";
+          break;
+        case 5: // Reserved (Subtle Red)
+          gradientColors = ["#FEF2F2", "#FEE2E2"];
+          tableBorderColor = "#ef4444";
+          break;
+      }
+    }
+
+    // Placings/plates coordinates inside table body
+    const platePositions: { x: number; y: number }[] = [];
+    if (seatsCount > 0) {
+      if (tableType === "round" || tableType === "oval") {
+        const plateRadiusOffset = Math.max(6, (tableW / 2) - 8);
+        for (let i = 0; i < seatsCount; i++) {
+          const angle = (i * 2 * Math.PI) / seatsCount - Math.PI / 2;
+          const px = tableW / 2 + plateRadiusOffset * Math.cos(angle);
+          const py = tableH / 2 + plateRadiusOffset * Math.sin(angle);
+          platePositions.push({ x: px, y: py });
+        }
+      } else {
+        let topCount = 0;
+        let bottomCount = 0;
+        let leftCount = 0;
+        let rightCount = 0;
+
+        if (seatsCount === 2) {
+          leftCount = 1;
+          rightCount = 1;
+        } else {
+          const base = Math.floor(seatsCount / 4);
+          const rem = seatsCount % 4;
+          topCount = base + (rem > 0 ? 1 : 0);
+          bottomCount = base + (rem > 1 ? 1 : 0);
+          leftCount = base + (rem > 2 ? 1 : 0);
+          rightCount = base;
+        }
+
+        const distFromEdge = Math.min(8, tableH * 0.18);
+        const distFromEdgeH = Math.min(8, tableW * 0.18);
+
+        for (let i = 0; i < topCount; i++) {
+          platePositions.push({ x: (i + 0.5) * (tableW / topCount), y: distFromEdge });
+        }
+        for (let i = 0; i < bottomCount; i++) {
+          platePositions.push({ x: (i + 0.5) * (tableW / bottomCount), y: tableH - distFromEdge });
+        }
+        for (let i = 0; i < leftCount; i++) {
+          platePositions.push({ x: distFromEdgeH, y: (i + 0.5) * (tableH / leftCount) });
+        }
+        for (let i = 0; i < rightCount; i++) {
+          platePositions.push({ x: tableW - distFromEdgeH, y: (i + 0.5) * (tableH / rightCount) });
+        }
+      }
+    }
+
+    if (!isAbsoluteLayout) {
+      return (
+        <TouchableOpacity
+          activeOpacity={isPaid ? 1 : 0.8}
+          disabled={isPaid}
+          style={[
+            styles.tableBox,
+            {
+              width: itemSize,
+              height: itemSize,
+              borderColor,
+              backgroundColor: bgColor,
+              borderWidth,
+              elevation: status !== 0 ? 0 : 2,
+              opacity: isPaid ? 0.92 : 1,
+              justifyContent: "center",
+              alignItems: "center",
+              borderRadius: 12,
+              position: "relative",
+            },
+          ]}
+          onPress={() => onPress(item, tableData)}
+        >
           {/* 🚀 HOLD OVERTIME INDICATOR (H) */}
           {status === 3 && !!tableData?.isHoldOvertime && (
             <View style={styles.holdOvertimeBadge}>
@@ -314,7 +873,7 @@ const TableItemComponent = React.memo(
           )}
 
           {/* 🚀 QR ORDER INDICATOR (QR badge) */}
-          {(tableData?.entryStatus !== undefined
+          {((tableData?.entryStatus !== undefined && tableData?.entryStatus !== null)
             ? tableData.entryStatus
             : item.entryStatus) === "q" &&
             status !== 0 && (
@@ -326,7 +885,155 @@ const TableItemComponent = React.memo(
                 />
               </View>
             )}
-        </View>
+
+          <Text
+            style={[
+              styles.tableNumber,
+              { 
+                fontSize: numberFont, 
+                color: "#000000", 
+                fontWeight: "900"
+              },
+            ]}
+          >
+            {item.label}
+          </Text>
+
+          {status !== 0 && (
+            <View style={[styles.tableInfo, { gap: 1 }]}>
+              <View
+                style={[
+                  styles.statusChip,
+                  { 
+                    backgroundColor: activeBg, 
+                    borderColor: activeColor,
+                    paddingHorizontal: 4,
+                    paddingVertical: 2,
+                    borderRadius: 6,
+                    marginBottom: 1,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.statusChipText,
+                    { color: activeColor, fontSize: smallFont },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {tableData?.customerName ? tableData.customerName : ui.text}
+                </Text>
+              </View>
+
+              {status !== 5 && (
+                <View style={styles.tableStats}>
+                  {timeText ? (
+                    <Text style={[styles.timeText, { fontSize: smallFont - 1, color: textColor }]}>
+                      <Ionicons name="time-outline" size={smallFont - 1} color={textColor} /> {timeText}
+                    </Text>
+                  ) : null}
+                  {billAmount >= 0 && (
+                    <Text style={[styles.billText, { fontSize: smallFont + 1, color: textColor, fontWeight: "800" }]}>
+                      ${billAmount.toFixed(2)}
+                    </Text>
+                  )}
+                </View>
+              )}
+            </View>
+          )}
+
+          {status === 5 && (
+            <View style={[styles.lockedOverlay, { marginTop: 1, gap: 1 }]}>
+              <Ionicons name="lock-closed" size={16} color={ui.color} />
+              {tableData?.lockedByName ? (
+                <Text style={[styles.lockedNameText, { fontSize: smallFont - 1 }]}>
+                  {tableData.lockedByName}
+                </Text>
+              ) : null}
+            </View>
+          )}
+        </TouchableOpacity>
+      );
+    }
+
+    return (
+      <TouchableOpacity
+        activeOpacity={isPaid ? 1 : 0.8}
+        disabled={isPaid}
+        style={isAbsoluteLayout ? {
+          width: itemSize,
+          height: itemSize,
+          position: "relative",
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: "transparent",
+          borderColor: "transparent",
+          borderWidth: 0,
+          borderRadius: 14,
+          padding: 8,
+          opacity: isPaid ? 0.92 : 1,
+        } : [
+          styles.tableBox,
+          {
+            width: itemSize,
+            height: itemSize,
+            borderColor,
+            backgroundColor: bgColor,
+            borderWidth,
+            elevation: status !== 0 ? 0 : 2,
+            opacity: isPaid ? 0.92 : 1,
+          },
+        ]}
+        onPress={() => onPress(item, tableData)}
+      >
+        {/* ── Shared FloorPlanTable: table body + chairs ── */}
+        <FloorPlanTable
+          tableW={tableW}
+          tableH={tableH}
+          borderRadius={borderRadius}
+          seatsCount={seatsCount}
+          status={status}
+          activeColor={activeColor}
+          activeBg={activeBg}
+          labelColor={labelColor}
+          textColor={textColor}
+          label={item.label}
+          uiText={ui.text}
+          paxCount={seatsCount}
+          timeText={timeText}
+          billAmount={billAmount}
+          customerName={tableData?.customerName}
+          lockedByName={tableData?.lockedByName}
+          chairSize={chairSize}
+          chairPositions={chairPositions}
+          tx={tx}
+          ty={ty}
+          smallFont={smallFont}
+          numberFont={numberFont}
+          itemSize={itemSize}
+        />
+
+
+          {/* 🟢 LIVE TERMINAL INDICATOR: top-left spinner for processing, circular red error badge when cancelled/failed */}
+          {terminalStatus && terminalStatus !== "idle" && (
+            <TouchableOpacity
+              style={[
+                styles.terminalProcessingBadge,
+                (terminalStatus === "cancelled" || terminalStatus === "failed") &&
+                  styles.terminalErrorBadge,
+              ]}
+              onPress={(e) => {
+                e.stopPropagation();
+                useTerminalPaymentStore.getState().clearSession(tableId);
+              }}
+            >
+              {terminalStatus === "processing" ? (
+                <RotatingSyncIcon size={20} color="#3b82f6" />
+              ) : (
+                <Ionicons name="alert" size={16} color="#ffffff" />
+              )}
+            </TouchableOpacity>
+          )}
       </TouchableOpacity>
     );
   },
@@ -379,14 +1086,20 @@ type TableItem = {
   paymentStatus?: number;
   customerName?: string;
   pax?: number;
+  TableType?: string;
+  Seats?: number;
+  XSize?: number;
+  YSize?: number;
+  XPos?: number;
+  YPos?: number;
 };
 
 const SECTIONS = ["SECTION_1", "SECTION_2", "SECTION_3", "TAKEAWAY"];
 
 const SECTION_LABELS: Record<string, string> = {
-  SECTION_1: "Section-1",
-  SECTION_2: "Section-2",
-  SECTION_3: "Section-3",
+  SECTION_1: "Section 1",
+  SECTION_2: "Section 2",
+  SECTION_3: "Section 3",
   TAKEAWAY: "Takeaway",
 };
 
@@ -415,11 +1128,48 @@ let lastGuestOpenedTable: {
 export default function Category() {
   const { width, height } = useWindowDimensions();
   const router = useRouter();
+  const [availableWidth, setAvailableWidth] = useState(780);
+
+  const onContainerLayout = (event: any) => {
+    const { width } = event.nativeEvent.layout;
+    if (width > 0) {
+      setAvailableWidth(width - 32); // 16px padding on left/right
+    }
+  };
+
+  const [backgroundTheme, setBackgroundTheme] = useState("champagne_fizz");
+
+  const [activeTab, setActiveTab] = useState<string>("SECTION_1");
+
+  const getSectionNum = (tab: string) => {
+    if (tab === "TAKEAWAY") return "4";
+    if (tab === "SECTION_1") return "1";
+    if (tab === "SECTION_2") return "2";
+    if (tab === "SECTION_3") return "3";
+    return "1";
+  };
+
+  const loadBackgroundTheme = async () => {
+    try {
+      const sectionNum = getSectionNum(activeTab);
+      const savedTheme = await AsyncStorage.getItem(`layout_background_theme_${sectionNum}`);
+      if (savedTheme === "champagne" || savedTheme === "champagne_fizz" || savedTheme === "citrine" || savedTheme === "champagne_glass" || savedTheme === "cloud_nine") {
+        setBackgroundTheme(savedTheme);
+      } else {
+        setBackgroundTheme("champagne_fizz");
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    loadBackgroundTheme();
+  }, [activeTab]);
+
   const { showToast } = useToast();
   const { section: urlSection } = useLocalSearchParams<{ section?: string }>();
   const isWindows = Platform.OS === "windows" || (Platform.OS === "web" && typeof navigator !== "undefined" && /win/i.test(navigator.platform || navigator.userAgent));
-
-  const [activeTab, setActiveTab] = useState<string>("SECTION_1");
   const [allTables, setAllTables] = useState<TableItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -428,6 +1178,7 @@ export default function Category() {
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
   const [isTablesExpanded, setIsTablesExpanded] = useState(false);
+  const [isTableMasterExpanded, setIsTableMasterExpanded] = useState(false);
   const [isStaffExpanded, setIsStaffExpanded] = useState(false);
   const [isCustomerExpanded, setIsCustomerExpanded] = useState(false);
   const [isReportsExpanded, setIsReportsExpanded] = useState(false);
@@ -465,6 +1216,8 @@ export default function Category() {
       })
       .catch((err) => console.log("Error fetching company settings for license:", err));
   }, []);
+
+
 
   // ──── Move Table modal states ────────────────────────────────────────────
   const [isMoveTableVisible, setIsMoveTableVisible] = useState(false);
@@ -819,6 +1572,16 @@ export default function Category() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    socket.on("table_config_updated", () => {
+      fetchTables();
+      loadBackgroundTheme();
+    });
+    return () => {
+      socket.off("table_config_updated");
+    };
+  }, []);
+
   // fetchLockedTables consolidated into fetchTables
 
   const fetchTables = async () => {
@@ -862,6 +1625,12 @@ export default function Category() {
           paymentStatus: Number(item.paymentStatus) || 0,
           customerName: item.customerName || item.CustomerName || null,
           pax: item.pax || item.Pax || null,
+          TableType: item.TableType,
+          Seats: item.Seats !== undefined && item.Seats !== null ? Number(item.Seats) : undefined,
+          XSize: item.XSize !== undefined && item.XSize !== null ? Number(item.XSize) : undefined,
+          YSize: item.YSize !== undefined && item.YSize !== null ? Number(item.YSize) : undefined,
+          XPos: item.XPos !== undefined && item.XPos !== null ? Number(item.XPos) : undefined,
+          YPos: item.YPos !== undefined && item.YPos !== null ? Number(item.YPos) : undefined,
         }));
 
         const uniqueTables = convertedData.filter(
@@ -873,7 +1642,16 @@ export default function Category() {
           if (prev.length !== uniqueTables.length) return uniqueTables;
           const isSame = prev.every(
             (t, i) =>
-              t.id === uniqueTables[i].id && t.label === uniqueTables[i].label,
+              t.id === uniqueTables[i].id &&
+              t.label === uniqueTables[i].label &&
+              t.XPos === uniqueTables[i].XPos &&
+              t.YPos === uniqueTables[i].YPos &&
+              t.XSize === uniqueTables[i].XSize &&
+              t.YSize === uniqueTables[i].YSize &&
+              t.TableType === uniqueTables[i].TableType &&
+              t.Status === uniqueTables[i].Status &&
+              t.Seats === uniqueTables[i].Seats &&
+              t.totalAmount === uniqueTables[i].totalAmount
           );
           return isSame ? prev : uniqueTables;
         });
@@ -1020,6 +1798,17 @@ export default function Category() {
     });
   }, [allTables, activeTab]);
 
+  // Check if any table in the current section has saved layout positions (XPos > 0 or YPos > 0)
+  const hasCustomLayout = useMemo(() => {
+    return currentTables.some((t) => (t.XPos && t.XPos > 0) || (t.YPos && t.YPos > 0));
+  }, [currentTables]);
+
+  // Dynamic Canvas Height based on table positions in current section
+  const canvasHeight = useMemo(() => {
+    const maxY = currentTables.reduce((max, t) => Math.max(max, t.YPos || 0), 0);
+    return Math.max(650, maxY + 140);
+  }, [currentTables]);
+
   // 🚀 Optimized Occupied Count: Only re-renders when the count changes
   const occupiedCount = useTableStatusStore(
     (state) =>
@@ -1139,7 +1928,8 @@ export default function Category() {
             tableId: id,
           });
           if (checkoutFlowEnabled) {
-            router.push("/summary");
+            clearOrderContext();
+            router.replace("/(tabs)/category");
           } else {
             router.push("/payment");
           }
@@ -1203,8 +1993,8 @@ export default function Category() {
       if (userLicenseToDate) {
         const today = new Date();
         const licDate = new Date(userLicenseToDate);
-        today.setHours(0,0,0,0);
-        licDate.setHours(0,0,0,0);
+        today.setHours(0, 0, 0, 0);
+        licDate.setHours(0, 0, 0, 0);
         if (today > licDate) {
           showToast({
             type: "error",
@@ -1234,11 +2024,57 @@ export default function Category() {
           ? tableData.entryStatus
           : item.entryStatus;
       if (tableEntryStatus === "q" && tablePaymentStatus === 1) {
-        showToast({
-          type: "info",
-          message: "Order Paid",
-          subtitle:
-            "This QR order is already paid. Waiting for kitchen to serve.",
+        Alert.alert(
+          "Order Already Paid",
+          `Table ${item.label} order has been paid. What would you like to do?`,
+          [
+            {
+              text: "Clear Table (Reset)",
+              style: "destructive",
+              onPress: async () => {
+                await updateTableStatus(item.id, 0);
+                (useCartStore.getState() as any).clearTableSession(item.id);
+                showToast({
+                  type: "success",
+                  message: "Table Cleared",
+                  subtitle: `Table ${item.label} has been reset.`,
+                });
+              },
+            },
+            {
+              text: "Go to KDS",
+              onPress: () => {
+                router.push("/kds" as any);
+              },
+            },
+            {
+              text: "Cancel",
+              style: "cancel",
+            },
+          ]
+        );
+        return;
+      }
+
+      // 🚀 RESTORE FLOW: If there is a live terminal session for this table, bypass all
+      // popups and route directly to /payment so staff can monitor the ongoing transaction.
+      const activeTerminalSession = useTerminalPaymentStore.getState().getSession(item.id);
+      // Only use the explicit toggle flag — NOT session.isSplit, which persists after terminal resolves
+      const isSplitPersisted = useTerminalPaymentStore.getState().activeSplitTables[item.id] === true;
+      if (
+        (activeTerminalSession && (activeTerminalSession.status === "processing" || activeTerminalSession.status === "cancelled" || activeTerminalSession.status === "failed")) ||
+        isSplitPersisted
+      ) {
+        const section = getSectionFromDiningSection(item.DiningSection);
+        setOrderContext({
+          orderType: "DINE_IN",
+          section,
+          tableNo: item.label,
+          tableId: item.id,
+        });
+        router.push({
+          pathname: "/payment",
+          params: isSplitPersisted ? { isSplit: "true" } : {},
         });
         return;
       }
@@ -1289,7 +2125,29 @@ export default function Category() {
           );
         }
 
-        router.push("/menu/thai_kitchen");
+        // Check if there is a saved screen for this table
+        const { useTableNavigationStore } = require("../../stores/tableNavigationStore");
+        const tableIdStr = item.id ? String(item.id) : "";
+        const lastScreen = tableIdStr ? useTableNavigationStore.getState().tableScreens[tableIdStr] : null;
+
+        const tableCartItems = contextId ? useCartStore.getState().carts[contextId] || [] : [];
+        const terminalSession = tableIdStr ? useTerminalPaymentStore.getState().sessions[tableIdStr] : undefined;
+
+        if (lastScreen === "payment") {
+          if (tableCartItems.length > 0 || (terminalSession && terminalSession.status === "processing")) {
+            router.push("/payment");
+          } else {
+            if (tableIdStr) {
+              useTableNavigationStore.getState().clearTableLastScreen(tableIdStr);
+              useTableNavigationStore.getState().clearSelectedMethod(tableIdStr);
+            }
+            router.push("/menu/thai_kitchen");
+          }
+        } else if (lastScreen === "summary") {
+          router.push("/summary");
+        } else {
+          router.push("/menu/thai_kitchen");
+        }
         return;
       }
 
@@ -1379,6 +2237,14 @@ export default function Category() {
       // 🚀 BUG FIX: If table is empty, clear local cart immediately to prevent "popping" stale data
       if (status === 0) {
         setCartItemsGlobal(contextId, [], true); // skipSync=true to avoid double sync
+        try {
+          const { useTableNavigationStore } = require("../../stores/tableNavigationStore");
+          if (newContext.tableId) {
+            useTableNavigationStore.getState().clearTableLastScreen(newContext.tableId);
+          }
+        } catch (err) {
+          console.warn("Failed to clear table navigation state:", err);
+        }
       }
     }
 
@@ -1396,7 +2262,33 @@ export default function Category() {
       }
     }
 
-    router.push("/menu/thai_kitchen");
+    // Check if there is a saved screen for this table
+    const { useTableNavigationStore } = require("../../stores/tableNavigationStore");
+    const tableIdStr = newContext.tableId ? String(newContext.tableId) : "";
+    const lastScreen = tableIdStr ? useTableNavigationStore.getState().tableScreens[tableIdStr] : null;
+
+    const tableCartItems = contextId ? useCartStore.getState().carts[contextId] || [] : [];
+    const terminalSession = tableIdStr ? useTerminalPaymentStore.getState().sessions[tableIdStr] : undefined;
+
+    if (lastScreen === "payment") {
+      if (status !== 0 && (tableCartItems.length > 0 || (terminalSession && terminalSession.status === "processing"))) {
+        router.push("/payment");
+      } else {
+        if (tableIdStr) {
+          useTableNavigationStore.getState().clearTableLastScreen(tableIdStr);
+          useTableNavigationStore.getState().clearSelectedMethod(tableIdStr);
+        }
+        router.push("/menu/thai_kitchen");
+      }
+    } else if (lastScreen === "summary" && status !== 0) {
+      router.push("/summary");
+    } else {
+      if (tableIdStr && status === 0) {
+        useTableNavigationStore.getState().clearTableLastScreen(tableIdStr);
+        useTableNavigationStore.getState().clearSelectedMethod(tableIdStr);
+      }
+      router.push("/menu/thai_kitchen");
+    }
   };
 
   const handleGuestSubmit = async () => {
@@ -1618,6 +2510,7 @@ export default function Category() {
           numberFont={numberFont}
           smallFont={smallFont}
           isTabletPortrait={!isLandscape && isTablet}
+          backgroundTheme={backgroundTheme}
         />
       );
     },
@@ -1629,6 +2522,7 @@ export default function Category() {
       smallFont,
       width,
       height,
+      backgroundTheme,
     ],
   );
 
@@ -1665,6 +2559,16 @@ export default function Category() {
 
   const renderLicenseView = (isFloating: boolean) => {
     if (!companyInfo) return null;
+
+    const fromDate = (user?.licenseFromDate || companyInfo.LicenseFromDate)
+      ? (user?.licenseFromDate || companyInfo.LicenseFromDate).split("T")[0]
+      : "N/A";
+    const toDate = (user?.licenseToDate || companyInfo.LicenseToDate)
+      ? (user?.licenseToDate || companyInfo.LicenseToDate).split("T")[0]
+      : "N/A";
+
+    const hasLicense = (user?.licenseFromDate || user?.licenseToDate || companyInfo.LicenseFromDate || companyInfo.LicenseToDate);
+
     return (
       <View style={isFloating ? {
         position: "absolute",
@@ -1681,57 +2585,104 @@ export default function Category() {
         justifyContent: "center",
         marginTop: 12,
       }}>
-        <View style={{
-          flexDirection: "row",
-          alignItems: "center",
-          backgroundColor: "#F8FAFC",
-          borderRadius: 12,
-          padding: 12,
-          borderWidth: 1.2,
-          borderColor: "#E2E8F0",
-          maxWidth: 420,
-          width: isFloating ? 320 : "100%",
-          gap: 12,
-          shadowColor: "#0F172A",
-          shadowOffset: { width: 0, height: 1 },
-          shadowOpacity: 0.04,
-          shadowRadius: 4,
-          elevation: 1,
-        }}>
+        <LinearGradient
+          colors={["#FFFFFF", "#F8FAFC"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            borderRadius: 16,
+            padding: 12,
+            borderWidth: 1,
+            borderColor: "#E2E8F0",
+            maxWidth: 380,
+            width: isFloating ? 320 : "100%",
+            gap: 12,
+            shadowColor: "#6366F1",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.04,
+            shadowRadius: 6,
+            elevation: 1,
+          }}
+        >
           {companyInfo.CompanyLogoUrl ? (
-            <Image
-              source={{ uri: companyInfo.CompanyLogoUrl }}
-              style={{ width: 56, height: 56, borderRadius: 8 }}
-              contentFit="contain"
-            />
-          ) : (
             <View style={{
-              width: 56,
-              height: 56,
               borderRadius: 8,
-              backgroundColor: "#F1F5F9",
-              alignItems: "center",
-              justifyContent: "center",
+              borderWidth: 1,
+              borderColor: "#E2E8F0",
+              padding: 2,
+              backgroundColor: "#FFFFFF",
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.03,
+              shadowRadius: 1,
+              elevation: 1,
             }}>
-              <Ionicons name="storefront-outline" size={24} color="#94A3B8" />
+              <Image
+                source={{ uri: companyInfo.CompanyLogoUrl }}
+                style={{ width: 46, height: 46, borderRadius: 8 }}
+                contentFit="contain"
+              />
             </View>
+          ) : (
+            <LinearGradient
+              colors={["#EEF2FF", "#E0E7FF"]}
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 10,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: "#E0E7FF",
+              }}
+            >
+              <Ionicons name="storefront" size={22} color="#4F46E5" />
+            </LinearGradient>
           )}
-          
+
           <View style={{ flex: 1, gap: 2 }}>
-            <Text style={{
-              fontFamily: Fonts.bold,
-              fontSize: 14,
-              color: "#0F172A",
-            }}>
-              {companyInfo.CompanyName || "Smart POS"}
-            </Text>
-            
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+              <Text style={{
+                fontFamily: Fonts.bold,
+                fontSize: 14,
+                color: "#1E293B",
+                letterSpacing: 0.1,
+              }}>
+                {companyInfo.CompanyName || "Smart POS"}
+              </Text>
+
+              {hasLicense && (
+                <View style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: "#DCFCE7",
+                  paddingHorizontal: 7,
+                  paddingVertical: 3,
+                  borderRadius: 8,
+                  gap: 3,
+                }}>
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#15803D" }} />
+                  <Text style={{
+                    fontFamily: Fonts.bold,
+                    fontSize: 10,
+                    color: "#166534",
+                    textTransform: "uppercase",
+                    letterSpacing: 0.2,
+                  }}>
+                    Active
+                  </Text>
+                </View>
+              )}
+            </View>
+
             {companyInfo.Address ? (
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                <Ionicons name="location-outline" size={11} color="#64748B" />
+                <Ionicons name="location-outline" size={12} color="#64748B" />
                 <Text style={{
                   fontFamily: Fonts.medium,
-                  fontSize: 10,
+                  fontSize: 11.5,
                   color: "#64748B",
                   flex: 1,
                 }} numberOfLines={1}>
@@ -1740,29 +2691,39 @@ export default function Category() {
               </View>
             ) : null}
 
-            {(user?.licenseFromDate || user?.licenseToDate || companyInfo.LicenseFromDate || companyInfo.LicenseToDate) ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 1 }}>
-                <Ionicons name="shield-checkmark-outline" size={11} color="#22C55E" />
+            {hasLicense ? (
+              <View style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 4,
+                marginTop: 2,
+                backgroundColor: "#F1F5F9",
+                paddingHorizontal: 8,
+                paddingVertical: 3,
+                borderRadius: 6,
+                alignSelf: "flex-start"
+              }}>
+                <Ionicons name="shield-checkmark" size={13} color="#10B981" />
                 <Text style={{
                   fontFamily: Fonts.semiBold,
-                  fontSize: 10,
-                  color: "#334155",
+                  fontSize: 10.5,
+                  color: "#475569",
                 }}>
-                  License: <Text style={{ color: "#22C55E", fontFamily: Fonts.bold }}>{(user?.licenseFromDate || companyInfo.LicenseFromDate) ? (user?.licenseFromDate || companyInfo.LicenseFromDate).split("T")[0] : "N/A"}</Text> to <Text style={{ color: "#22C55E", fontFamily: Fonts.bold }}>{(user?.licenseToDate || companyInfo.LicenseToDate) ? (user?.licenseToDate || companyInfo.LicenseToDate).split("T")[0] : "N/A"}</Text>
+                  Valid: <Text style={{ color: "#0F172A", fontFamily: Fonts.bold }}>{fromDate}</Text> to <Text style={{ color: "#0F172A", fontFamily: Fonts.bold }}>{toDate}</Text>
                 </Text>
               </View>
             ) : null}
-            
+
             <Text style={{
               fontFamily: Fonts.medium,
-              fontSize: 9,
+              fontSize: 9.5,
               color: "#94A3B8",
               marginTop: 2,
             }}>
-              @ 2026 UNIPRO . All rights reserved.
+              © 2026 UNIPRO. All rights reserved.
             </Text>
           </View>
-        </View>
+        </LinearGradient>
       </View>
     );
   };
@@ -1878,23 +2839,6 @@ export default function Category() {
                 })}
               </View>
             </ScrollView>
-
-            {/* Consolidated Menu Button (Hamburger) */}
-            <TouchableOpacity
-              style={[
-                styles.headerActionBtn,
-                {
-                  backgroundColor: Theme.primaryLight,
-                  borderColor: Theme.primaryBorder,
-                  paddingHorizontal: 10,
-                  paddingVertical: 6,
-                },
-              ]}
-              onPress={() => setIsMenuVisible(true)}
-              activeOpacity={0.75}
-            >
-              <Ionicons name="menu-outline" size={20} color={Theme.primary} />
-            </TouchableOpacity>
           </View>
 
           {/* Row 2: Date Picker, Day Start, and Status Buttons */}
@@ -2067,6 +3011,24 @@ export default function Category() {
                   )}
                 </View>
               </TouchableOpacity>
+
+              <WindowControls buttonStyle={{ height: 32, width: 32, borderRadius: 8 }} iconSize={16} hideHome={true} />
+
+              <TouchableOpacity
+                style={[
+                  styles.headerActionBtn,
+                  {
+                    backgroundColor: Theme.primaryLight,
+                    borderColor: Theme.primaryBorder,
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                  },
+                ]}
+                onPress={() => setIsMenuVisible(true)}
+                activeOpacity={0.75}
+              >
+                <Ionicons name="menu-outline" size={20} color={Theme.primary} />
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -2078,7 +3040,7 @@ export default function Category() {
               styles.topNavContainer,
               { paddingHorizontal: isTablet ? 20 : 12, borderBottomWidth: 0, shadowColor: 'transparent', elevation: 0 },
               !isTablet &&
-                isLandscape && { height: 42, paddingVertical: 2, gap: 8 },
+              isLandscape && { height: 42, paddingVertical: 2, gap: 8 },
             ]}
           >
             {/* CENTER — Section Tabs */}
@@ -2124,10 +3086,10 @@ export default function Category() {
                         styles.tabBtn,
                         isActive && styles.activeTabBtn,
                         !isTablet &&
-                          isLandscape && {
-                            paddingVertical: 6,
-                            paddingHorizontal: 12,
-                          },
+                        isLandscape && {
+                          paddingVertical: 6,
+                          paddingHorizontal: 12,
+                        },
                       ]}
                     >
                       <Ionicons
@@ -2145,9 +3107,9 @@ export default function Category() {
                       >
                         {!isTablet && !isLandscape
                           ? formatSectionGlobal(SECTION_LABELS[section]).replace(
-                              "Section ",
-                              "Sec-",
-                            )
+                            "Section ",
+                            "Sec-",
+                          )
                           : formatSectionGlobal(SECTION_LABELS[section])}
                       </Text>
                       {occupied > 0 && (
@@ -2174,8 +3136,8 @@ export default function Category() {
             </ScrollView>
 
             {/* RIGHT — Action Buttons */}
-            <View style={[styles.navRightGroup, { gap: isTablet ? 8 : 6 }]}>
-              {/* Kitchen Status — moved from menu */}
+            <View style={[styles.navRightGroup, { gap: isTablet ? 8 : 6, flexDirection: "row", alignItems: "center" }]}>
+              {/* Kitchen Status */}
               {enableKDS && (
                 <TouchableOpacity
                   style={[styles.headerActionBtn, { position: "relative" }]}
@@ -2209,11 +3171,6 @@ export default function Category() {
                         paddingHorizontal: 4,
                         borderWidth: 1.5,
                         borderColor: "#FFF",
-                        shadowColor: "#000",
-                        shadowOffset: { width: 0, height: 1 },
-                        shadowOpacity: 0.2,
-                        shadowRadius: 1,
-                        elevation: 2,
                       }}
                     >
                       <Text
@@ -2232,7 +3189,7 @@ export default function Category() {
                 </TouchableOpacity>
               )}
 
-              {/* KDS — gated by OPRSTK and General Settings */}
+              {/* KDS */}
               {canAccessKDS() && enableKDS && (
                 <TouchableOpacity
                   style={styles.headerActionBtn}
@@ -2250,37 +3207,33 @@ export default function Category() {
                 </TouchableOpacity>
               )}
 
-              {/* Alerts/Notifications Button */}
+              {/* Alerts/Notifications */}
               <TouchableOpacity
-                style={styles.headerActionBtn}
+                style={[styles.headerActionBtn, { width: 40, height: 40, justifyContent: "center", paddingHorizontal: 0 }]}
                 onPress={() => setIsNotifModalVisible(true)}
                 activeOpacity={0.75}
               >
-                <View style={{ position: "relative" }}>
-                  <Ionicons name="notifications-outline" size={20} color={Theme.primary} />
-                  {unreadCount > 0 && (
-                    <View style={{
-                      position: "absolute",
-                      top: -6,
-                      right: -6,
-                      backgroundColor: Theme.danger || "#ef4444",
-                      borderRadius: 7,
-                      minWidth: 14,
-                      height: 14,
-                      justifyContent: "center",
-                      alignItems: "center",
-                      borderWidth: 1,
-                      borderColor: "#FFF",
-                    }}>
-                      <Text style={{ color: "#fff", fontSize: 8, fontFamily: Fonts.bold }}>
-                        {unreadCount}
-                      </Text>
-                    </View>
-                  )}
-                </View>
+                <Ionicons name="notifications-outline" size={20} color={Theme.primary} />
+                {unreadCount > 0 && (
+                  <View style={{
+                    position: "absolute",
+                    top: 2,
+                    right: 2,
+                    backgroundColor: Theme.danger || "#ef4444",
+                    borderRadius: 6,
+                    minWidth: 12,
+                    height: 12,
+                    justifyContent: "center",
+                    alignItems: "center",
+                    borderWidth: 1,
+                    borderColor: "#FFF",
+                  }} />
+                )}
               </TouchableOpacity>
 
-              {/* NEW CONSOLIDATED MENU BUTTON */}
+              <WindowControls buttonStyle={[styles.headerActionBtn, { width: 40, height: 40, justifyContent: "center", paddingHorizontal: 0 }]} iconSize={20} hideHome={true} />
+
+              {/* Menu */}
               <TouchableOpacity
                 style={[
                   styles.headerActionBtn,
@@ -2375,7 +3328,7 @@ export default function Category() {
             styles.topNavContainer,
             { paddingHorizontal: isTablet ? 20 : 12 },
             !isTablet &&
-              isLandscape && { height: 42, paddingVertical: 2, gap: 8 },
+            isLandscape && { height: 42, paddingVertical: 2, gap: 8 },
           ]}
         >
           {/* CENTER — Section Tabs */}
@@ -2421,10 +3374,10 @@ export default function Category() {
                       styles.tabBtn,
                       isActive && styles.activeTabBtn,
                       !isTablet &&
-                        isLandscape && {
-                          paddingVertical: 6,
-                          paddingHorizontal: 12,
-                        },
+                      isLandscape && {
+                        paddingVertical: 6,
+                        paddingHorizontal: 12,
+                      },
                     ]}
                   >
                     <Ionicons
@@ -2442,9 +3395,9 @@ export default function Category() {
                     >
                       {!isTablet && !isLandscape
                         ? formatSectionGlobal(SECTION_LABELS[section]).replace(
-                            "Section ",
-                            "Sec-",
-                          )
+                          "Section ",
+                          "Sec-",
+                        )
                         : formatSectionGlobal(SECTION_LABELS[section])}
                     </Text>
                     {occupied > 0 && (
@@ -2611,33 +3564,29 @@ export default function Category() {
 
             {/* Alerts/Notifications Button */}
             <TouchableOpacity
-              style={styles.headerActionBtn}
+              style={[styles.headerActionBtn, { width: 40, height: 40, justifyContent: "center", paddingHorizontal: 0 }]}
               onPress={() => setIsNotifModalVisible(true)}
               activeOpacity={0.75}
             >
-              <View style={{ position: "relative" }}>
-                <Ionicons name="notifications-outline" size={20} color={Theme.primary} />
-                {unreadCount > 0 && (
-                  <View style={{
-                    position: "absolute",
-                    top: -6,
-                    right: -6,
-                    backgroundColor: Theme.danger || "#ef4444",
-                    borderRadius: 7,
-                    minWidth: 14,
-                    height: 14,
-                    justifyContent: "center",
-                    alignItems: "center",
-                    borderWidth: 1,
-                    borderColor: "#FFF",
-                  }}>
-                    <Text style={{ color: "#fff", fontSize: 8, fontFamily: Fonts.bold }}>
-                      {unreadCount}
-                    </Text>
-                  </View>
-                )}
-              </View>
+              <Ionicons name="notifications-outline" size={20} color={Theme.primary} />
+              {unreadCount > 0 && (
+                <View style={{
+                  position: "absolute",
+                  top: 2,
+                  right: 2,
+                  backgroundColor: Theme.danger || "#ef4444",
+                  borderRadius: 6,
+                  minWidth: 12,
+                  height: 12,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  borderWidth: 1,
+                  borderColor: "#FFF",
+                }} />
+              )}
             </TouchableOpacity>
+
+            <WindowControls buttonStyle={[styles.headerActionBtn, { width: 40, height: 40, justifyContent: "center", paddingHorizontal: 0 }]} iconSize={20} hideHome={true} />
 
             {/* NEW CONSOLIDATED MENU BUTTON */}
             <TouchableOpacity
@@ -2914,6 +3863,29 @@ export default function Category() {
                     </View>
                     <Text style={styles.subMenuItemText}>Transfer Table</Text>
                   </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    style={styles.subMenuItem}
+                    onPress={() => {
+                      setIsMenuVisible(false);
+                      router.push("/table-master");
+                    }}
+                  >
+                    <View
+                      style={[
+                        styles.menuIconContainer,
+                        { backgroundColor: Theme.primary + "10" },
+                      ]}
+                    >
+                      <Ionicons
+                        name="create-outline"
+                        size={18}
+                        color={Theme.primary}
+                      />
+                    </View>
+                    <Text style={styles.subMenuItemText}>Table Master</Text>
+                  </TouchableOpacity>
                 </View>
               )}
 
@@ -3058,13 +4030,13 @@ export default function Category() {
                     <View
                       style={[
                         styles.menuIconContainer,
-                        { backgroundColor: Theme.primary + "10" },
+                        { backgroundColor: "#16a34a15" },
                       ]}
                     >
                       <MaterialCommunityIcons
-                        name="card-outline"
+                        name="medal-outline"
                         size={18}
-                        color={Theme.primary}
+                        color="#16a34a"
                       />
                     </View>
                     <Text style={styles.subMenuItemText}>Loyalty</Text>
@@ -3494,11 +4466,11 @@ export default function Category() {
                     </Text>
                     <View style={{ gap: 8 }}>
                       {[
-                        { color: "#22c55e", label: "Dining" },
-                        { color: "#3b82f6", label: "Hold" },
-                        { color: "#f59e0b", label: "Checkout" },
-                        { color: "#ef4444", label: "Reserved" },
-                        { color: "#8b5cf6", label: "Overtime" },
+                        { color: "#81C995", label: "Dining" },
+                        { color: "#93C5FD", label: "Hold" },
+                        { color: "#FCD34D", label: "Checkout" },
+                        { color: "#FCA5A5", label: "Reserved" },
+                        { color: "#C084FC", label: "Overtime" },
                       ].map((item) => (
                         <View key={item.label} style={styles.legendItem}>
                           <View
@@ -3567,7 +4539,7 @@ export default function Category() {
           style={[
             styles.sectionHeader,
             !isTablet &&
-              isLandscape && { paddingVertical: 4, paddingHorizontal: 14 },
+            isLandscape && { paddingVertical: 4, paddingHorizontal: 14 },
           ]}
         >
           <View style={styles.sectionHeaderLeft}>
@@ -3614,11 +4586,11 @@ export default function Category() {
           {isTablet && (
             <View style={styles.legend}>
               {[
-                { color: "#22c55e", label: "Dining" },
-                { color: "#3b82f6", label: "Hold" },
-                { color: "#f59e0b", label: "Checkout" },
-                { color: "#ef4444", label: "Reserved" },
-                { color: "#8b5cf6", label: "Overtime" },
+                { color: "#81C995", label: "Dining" },
+                { color: "#93C5FD", label: "Hold" },
+                { color: "#FCD34D", label: "Checkout" },
+                { color: "#FCA5A5", label: "Reserved" },
+                { color: "#C084FC", label: "Overtime" },
               ].map((item) => (
                 <View key={item.label} style={styles.legendItem}>
                   <View
@@ -3633,45 +4605,120 @@ export default function Category() {
       )}
 
       {/* â•â•â•â•â•â•â•â•â•â•â• TABLE GRID â•â•â•â•â•â•â•â•â•â•â• */}
-      <FlatList
-        data={currentTables}
-        key={columns}
-        numColumns={columns}
-        keyExtractor={(item: TableItem) => item.id}
-        renderItem={renderItem}
-        columnWrapperStyle={{ gap: GAP }}
-        getItemLayout={(data, index) => ({
-          length: itemSize + GAP,
-          offset: (itemSize + GAP) * Math.floor(index / columns),
-          index,
-        })}
-        removeClippedSubviews={Platform.OS !== "web"}
-        maxToRenderPerBatch={isTablet ? 20 : 10}
-        windowSize={3}
-        initialNumToRender={isTablet ? 30 : 15}
-        contentContainerStyle={{
-          gap: GAP,
-          paddingHorizontal: PADDING,
-          paddingBottom: isTablet ? 160 : 100,
-          paddingTop: 8,
-        }}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="grid-outline" size={48} color={Theme.border} />
-            <Text style={styles.emptyText}>No tables found</Text>
-            <TouchableOpacity onPress={fetchTables} style={styles.retryBtn}>
-              <Ionicons
-                name="refresh-outline"
-                size={16}
-                color={Theme.primary}
-              />
-              <Text style={styles.retryText}>Refresh</Text>
-            </TouchableOpacity>
-          </View>
-        }
-        ListFooterComponent={null}
-      />
+      {/* ═════════════ TABLE VISUAL FLOOR MAP ═════════════ */}
+      {/* ═════════════ TABLE LAYOUT RENDERER ═════════════ */}
+      {!hasCustomLayout ? (
+        <FlatList
+          data={currentTables}
+          key={columns}
+          numColumns={columns}
+          keyExtractor={(item: TableItem) => item.id}
+          renderItem={renderItem}
+          columnWrapperStyle={{ gap: GAP }}
+          getItemLayout={(data, index) => ({
+            length: itemSize + GAP,
+            offset: (itemSize + GAP) * Math.floor(index / columns),
+            index,
+          })}
+          removeClippedSubviews={Platform.OS !== "web"}
+          maxToRenderPerBatch={isTablet ? 20 : 10}
+          windowSize={3}
+          initialNumToRender={isTablet ? 30 : 15}
+          contentContainerStyle={{
+            gap: GAP,
+            paddingHorizontal: PADDING,
+            paddingBottom: isTablet ? 160 : 100,
+            paddingTop: 8,
+          }}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Ionicons name="grid-outline" size={48} color={Theme.border} />
+              <Text style={styles.emptyText}>No tables found</Text>
+              <TouchableOpacity onPress={fetchTables} style={styles.retryBtn}>
+                <Ionicons
+                  name="refresh-outline"
+                  size={16}
+                  color={Theme.primary}
+                />
+                <Text style={styles.retryText}>Refresh</Text>
+              </TouchableOpacity>
+            </View>
+          }
+        />
+      ) : (
+        <View style={{ flex: 1 }}>
+          {currentTables.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="grid-outline" size={48} color={Theme.border} />
+              <Text style={styles.emptyText}>No tables found</Text>
+              <TouchableOpacity onPress={fetchTables} style={styles.retryBtn}>
+                <Ionicons
+                  name="refresh-outline"
+                  size={16}
+                  color={Theme.primary}
+                />
+                <Text style={styles.retryText}>Refresh</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={{ flex: 1 }} onLayout={onContainerLayout}>
+              <ScrollView 
+                contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
+                showsVerticalScrollIndicator={false}
+                style={{ flex: 1 }}
+              >
+                <CanvasBackground
+                  theme={backgroundTheme}
+                  style={{
+                    width: availableWidth,
+                    height: canvasHeight * (availableWidth / 780),
+                    borderRadius: 16,
+                    position: "relative",
+                    overflow: "hidden",
+                  }}
+                  isCategory={true}
+                >
+                  {/* Render each Table component placed absolute */}
+                  {(() => {
+                    const layoutScale = availableWidth / 780;
+
+                    return currentTables.map((item, index) => {
+                      const defaultX = (item.XPos || 30 + (index % 4) * 170) * layoutScale;
+                      const defaultY = (item.YPos || 30 + Math.floor(index / 4) * 130) * layoutScale;
+
+                      return (
+                        <View
+                          key={item.id}
+                          style={{
+                            position: "absolute",
+                            left: defaultX,
+                            top: defaultY,
+                          }}
+                        >
+                          <TableItemComponent
+                            tableId={item.id}
+                            item={item}
+                            itemSize={90}
+                            activeTab={activeTab}
+                            onPress={handleTablePress}
+                            numberFont={numberFont}
+                            smallFont={smallFont}
+                            isTabletPortrait={!isLandscape && isTablet}
+                            isAbsoluteLayout={true}
+                            layoutScale={layoutScale}
+                            backgroundTheme={backgroundTheme}
+                          />
+                        </View>
+                      );
+                    });
+                  })()}
+                </CanvasBackground>
+              </ScrollView>
+            </View>
+        )}
+      </View>
+    )}
       {/* 〰〰〰〰〰〰〰〰〰〰〰 CUSTOMER GUEST & PAX MODAL 〰〰〰〰〰〰〰〰〰〰〰 */}
       <Modal
         visible={guestModalVisible}
@@ -3692,7 +4739,7 @@ export default function Category() {
         >
           <TouchableOpacity
             activeOpacity={1}
-            onPress={() => {}} // Stop propagation
+            onPress={() => { }} // Stop propagation
             style={{
               backgroundColor: Theme.bgCard,
               padding: 24,
@@ -4071,7 +5118,7 @@ export default function Category() {
                   pax: tableData.pax !== undefined ? tableData.pax : t.pax,
                   currentOrderId:
                     tableData.orderId !== "EMPTY" &&
-                    tableData.orderId !== "SYNC"
+                      tableData.orderId !== "SYNC"
                       ? tableData.orderId
                       : t.currentOrderId,
                 };
@@ -4227,7 +5274,7 @@ export default function Category() {
                     <Text style={styles.moveTableSection}>
                       {
                         SECTION_SHORT[
-                          getSectionFromDiningSection(item.DiningSection)
+                        getSectionFromDiningSection(item.DiningSection)
                         ]
                       }
                     </Text>
@@ -4385,7 +5432,7 @@ export default function Category() {
                 </View>
 
                 {/* Modal Content */}
-                <ScrollView 
+                <ScrollView
                   contentContainerStyle={{ padding: 16, gap: 10 }}
                   showsVerticalScrollIndicator={false}
                 >
@@ -4447,10 +5494,10 @@ export default function Category() {
                           alignItems: "center",
                           justifyContent: "center",
                         }}>
-                          <Ionicons 
-                            name={item.type === "QR_ORDER" ? "qr-code-outline" : "information-circle-outline"} 
-                            size={18} 
-                            color={item.read ? "#64748B" : Theme.primary} 
+                          <Ionicons
+                            name={item.type === "QR_ORDER" ? "qr-code-outline" : "information-circle-outline"}
+                            size={18}
+                            color={item.read ? "#64748B" : Theme.primary}
                           />
                         </View>
                         <View style={{ flex: 1, gap: 2 }}>
@@ -4468,13 +5515,13 @@ export default function Category() {
                                 Order #{item.orderId ? item.orderId.split("-").pop() : "Order"}
                               </Text>
                               <View style={{ flexDirection: "row", alignItems: "center" }}>
-                                <Text style={{ 
-                                  fontSize: 15, 
-                                  fontFamily: Fonts.bold, 
-                                  color: Theme.primary, 
-                                  backgroundColor: "#FFF7ED", 
-                                  paddingHorizontal: 8, 
-                                  paddingVertical: 4, 
+                                <Text style={{
+                                  fontSize: 15,
+                                  fontFamily: Fonts.bold,
+                                  color: Theme.primary,
+                                  backgroundColor: "#FFF7ED",
+                                  paddingHorizontal: 8,
+                                  paddingVertical: 4,
                                   borderRadius: 6,
                                   borderWidth: 1,
                                   borderColor: "#FFEDD5",
@@ -4516,7 +5563,7 @@ export default function Category() {
                     backgroundColor: "#F8FAFC",
                     alignItems: "center",
                   }}>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       onPress={() => {
                         useNotificationStore.getState().clearNotifications();
                         showToast({ type: "success", message: "Cleared", subtitle: "All notifications cleared." });
@@ -4847,7 +5894,7 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   tableNumber: {
-    fontFamily: Fonts.black,
+    fontWeight: "900",
     color: Theme.textPrimary,
     marginTop: 4,
     marginBottom: 2,
@@ -5066,7 +6113,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 8,
     right: 8,
-    backgroundColor: "#fd7e14",
+    backgroundColor: "#F59E0B",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
@@ -5095,6 +6142,24 @@ const styles = StyleSheet.create({
     padding: 2,
     zIndex: 10,
     ...Theme.shadowSm,
+  },
+  terminalProcessingBadge: {
+    position: "absolute",
+    top: 8,
+    left: 8,
+    width: 26,
+    height: 26,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 11,
+  },
+  terminalErrorBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#ef4444",
+    justifyContent: "center",
+    alignItems: "center",
   },
 
   /* ──────────────────────────────────────────────────────────────────

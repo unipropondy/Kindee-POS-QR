@@ -104,21 +104,17 @@ export default function CustomerItemDetailsScreen() {
     const current = selections[groupId] || [];
     if (isMulti) {
       if (current.includes(optionDishId)) {
-        setSelections({
-          ...selections,
-          [groupId]: current.filter(id => id !== optionDishId),
-        });
+        if (current.length > minSel) {
+          setSelections({
+            ...selections,
+            [groupId]: current.filter(id => id !== optionDishId),
+          });
+        }
       } else {
         if (current.length < maxSel) {
           setSelections({
             ...selections,
             [groupId]: [...current, optionDishId],
-          });
-        } else {
-          // Reached limit, automatically unselect the oldest option (FIFO) and select the new one
-          setSelections({
-            ...selections,
-            [groupId]: [...current.slice(1), optionDishId],
           });
         }
       }

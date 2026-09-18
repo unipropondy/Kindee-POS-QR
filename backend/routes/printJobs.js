@@ -99,16 +99,9 @@ router.get('/pending', authenticateBridge, async (req, res) => {
     let jobs = result.recordset || [];
 
     if (jobs.length > 0) {
-      // Decode Base64 cash drawer trigger to binary string
-      jobs = jobs.map(job => {
-        if (job.Content === 'G3AAGRk=') {
-          return {
-            ...job,
-            Content: '\x1B\x70\x00\x19\x19'
-          };
-        }
-        return job;
-      });
+      // NOTE: Do NOT decode the base64 cash drawer command here.
+      // Keeping Content as 'G3AAGRk=' (base64) ensures printer.ts routes it
+      // through the binary path — no line feeds or paper cut appended.
 
       // Mark them as PROCESSING
       const jobIds = jobs.map(j => `'${j.JobId}'`).join(',');
@@ -153,6 +146,27 @@ router.post('/:jobId/complete', authenticateBridge, async (req, res) => {
     res.json({ success: true, message: 'Job completed successfully' });
   } catch (err) {
     console.error('Error completing print job:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3.5. POST /api/print-jobs/:jobId/release - Release job back to PENDING without consuming attempts (for network timeouts)
+router.post('/:jobId/release', authenticateBridge, async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const pool = getPool();
+    await pool.request()
+      .input('JobId', sql.UniqueIdentifier, jobId)
+      .query(`
+        UPDATE PrintJobQueue
+        SET Status = 'PENDING', 
+            Attempts = CASE WHEN Attempts > 0 THEN Attempts - 1 ELSE 0 END, 
+            ProcessedOn = NULL
+        WHERE JobId = @JobId
+      `);
+    res.json({ success: true, message: 'Job released back to queue' });
+  } catch (err) {
+    console.error('Error releasing print job:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -285,6 +299,17 @@ router.post('/', authenticateBridge, async (req, res) => {
       `);
 
     res.json({ success: true, message: 'Print job queued successfully', jobId, printerIp, printerName });
+
+    // Notify native APK clients to process the queue immediately (don't wait for 20s poll)
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('print_jobs_available', { storeId, jobId });
+        console.log(`[PrintQueue] Emitted print_jobs_available for JobId=${jobId}`);
+      }
+    } catch (emitErr) {
+      console.warn('[PrintQueue] Could not emit print_jobs_available:', emitErr.message);
+    }
   } catch (err) {
     console.error('Error queuing print job:', err);
     res.status(500).json({ success: false, error: err.message });

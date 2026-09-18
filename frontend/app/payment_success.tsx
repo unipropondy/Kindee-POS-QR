@@ -10,6 +10,7 @@ import {
   Platform,
   Alert,
   Modal,
+  Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Theme } from "../constants/theme";
@@ -18,6 +19,7 @@ import BillPrompt from "../components/BillPrompt";
 import UniversalPrinter from "../components/UniversalPrinter";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCompanySettingsStore } from "../stores/companySettingsStore";
+import { useGeneralSettingsStore } from "../stores/generalSettingsStore";
 import { CustomerDisplaySync } from "../utils/CustomerDisplaySync";
 import CashDrawerService from "../services/CashDrawerService";
 
@@ -58,8 +60,74 @@ export default function PaymentSuccess() {
     }
   }, [paymentsRaw]);
 
-  const [promptVisible, setPromptVisible] = React.useState(true);
+  const [promptVisible, setPromptVisible] = React.useState(false);
   const [showSplitConfirmModal, setShowSplitConfirmModal] = React.useState(false);
+  const [floatingFoods, setFloatingFoods] = React.useState<any[]>([]);
+  const spinValue = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    // Spin animation for background dish
+    Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 35000,
+        useNativeDriver: true,
+      })
+    ).start();
+
+    // Floating food icons
+    const icons = [
+      "pizza-outline",
+      "cafe-outline",
+      "ice-cream-outline",
+      "restaurant-outline",
+      "beer-outline",
+      "fast-food-outline",
+    ];
+
+    const interval = setInterval(() => {
+      const id = Math.random().toString();
+      const icon = icons[Math.floor(Math.random() * icons.length)];
+      const x = Math.random() * 80 + 10;
+      const y = Math.random() * 70 + 15;
+
+      const scale = new Animated.Value(0);
+      const translateY = new Animated.Value(0);
+      const opacity = new Animated.Value(1);
+
+      const newItem = { id, icon, x, y, scale, translateY, opacity };
+      setFloatingFoods((prev) => [...prev, newItem].slice(-15));
+
+      Animated.parallel([
+        Animated.spring(scale, {
+          toValue: 1.2,
+          tension: 30,
+          friction: 4,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: -85 - Math.random() * 60,
+          duration: 3800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0,
+          delay: 2400,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setFloatingFoods((prev) => prev.filter((item) => item.id !== id));
+      });
+    }, 850);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
 
   React.useEffect(() => {
     CustomerDisplaySync.syncPaymentSuccess({
@@ -81,7 +149,16 @@ export default function PaymentSuccess() {
     const cleanup = async () => {
       try {
         const { clearCart } = await import("../stores/cartStore");
-        const { clearOrderContext } = await import("../stores/orderContextStore");
+        const { getOrderContext, clearOrderContext } = await import("../stores/orderContextStore");
+        const { useTableNavigationStore } = await import("../stores/tableNavigationStore");
+        const { useTerminalPaymentStore } = await import("../stores/terminalPaymentStore");
+        const context = getOrderContext();
+        const targetTableId = (params.tableId as string) || (context?.tableId ? String(context.tableId) : undefined);
+        if (targetTableId) {
+          useTableNavigationStore.getState().clearTableLastScreen(targetTableId);
+          useTableNavigationStore.getState().clearSelectedMethod(targetTableId);
+          useTerminalPaymentStore.getState().clearSession(targetTableId);
+        }
         clearCart();
         clearOrderContext();
       } catch (err) {
@@ -89,7 +166,7 @@ export default function PaymentSuccess() {
       }
     };
     cleanup();
-  }, [params.isSplit]);
+  }, [params.isSplit, params.tableId]);
 
   const handleDone = () => {
     CustomerDisplaySync.isSuccessActive = false;
@@ -168,16 +245,30 @@ export default function PaymentSuccess() {
       const items = isLedger ? [{ name: "Member Outstanding Payment", qty: 1, price: parseFloat(total) || 0 }] : JSON.parse(itemsRaw || "[]");
       const userId = await AsyncStorage.getItem("userId") || "1";
 
+      const isFocPayment = method?.trim().toUpperCase() === 'FOC' ||
+        (payments && payments.some((p: any) => String(p.payMode || p.payModeName || '').trim().toUpperCase() === 'FOC'));
+      const parsedTotal = parseFloat(total) || 0;
+      // ✅ FOC Fix: For full-FOC orders, total param is 0 (effectiveTotalAmount = total - focAmount).
+      // We still need to print a receipt. Use discountInfo.subtotal as the display total.
+      const isSplitPayment = params.isSplit === "true";
+      const displayTotal = parsedTotal > 0 ? parsedTotal
+        : (discountInfo?.subtotal || discountInfo?.amount || parsedTotal);
+
+      // ✅ Split Fix: For split receipts, add a unique suffix to prevent duplicate cache blocking
+      const invoiceNum = isSplitPayment
+        ? `${orderId}-S${Date.now().toString(36).toUpperCase()}`
+        : orderId;
+
       // Compute subTotal from items so Sunmi printer can show Sub Total → Discount → Grand Total
       const computedSubTotal = isLedger ? (parseFloat(total) || 0) : (discountInfo?.subtotal 
         ?? items.filter((i: any) => i.status !== 'VOIDED')
                .reduce((s: number, i: any) => s + (i.price || 0) * (i.qty || i.quantity || 1), 0));
       
       const saleData = {
-        invoiceNumber: orderId,
+        invoiceNumber: invoiceNum,
         tableNo: isLedger ? "LEDGER" : tableNo,
-        total: parseFloat(total) || 0,
-        paymentMethod: method,
+        total: displayTotal,
+        paymentMethod: isFocPayment ? "FOC" : method,
         cashPaid: parseFloat(paid) || 0,
         change: parseFloat(change) || 0,
         items: items,
@@ -204,11 +295,102 @@ export default function PaymentSuccess() {
     }
   };
 
+  React.useEffect(() => {
+    const generalSettings = useGeneralSettingsStore.getState().settings;
+    const runAutoPrintFlow = async () => {
+      const enableReceiptPrint = generalSettings.enableReceiptPrint !== undefined ? generalSettings.enableReceiptPrint : true;
+      
+      if (enableReceiptPrint) {
+        await handlePrint();
+      } else {
+        await openDrawerForCash();
+      }
+    };
+    runAutoPrintFlow();
+
+    // Play custom voice audio asset
+    const playSuccessAudio = async () => {
+      try {
+        if (Platform.OS === "web") {
+          const audioAsset = require("../assets/Voice/Thank you, have a nice day.mp3");
+          const uri = typeof audioAsset === "object" && audioAsset.default ? audioAsset.default : audioAsset;
+          const audio = new window.Audio(uri);
+          audio.volume = 1.0;
+          await audio.play();
+        } else {
+          const { Audio } = require("expo-av");
+          try {
+            await Audio.setAudioModeAsync({
+              playsInSilentModeIOS: true,
+              staysActiveInBackground: true,
+              shouldDuckAndroid: false,
+              allowsRecordingIOS: false,
+            });
+          } catch (_) {}
+          
+          const thankYouSound = require("../assets/Voice/Thank you, have a nice day.mp3");
+          const { sound } = await Audio.Sound.createAsync(
+            thankYouSound,
+            { shouldPlay: true, volume: 1.0 }
+          );
+          if (sound) {
+            sound.setOnPlaybackStatusUpdate((status: any) => {
+              if (status.didJustFinish) {
+                sound.unloadAsync().catch(() => {});
+              }
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to play custom success voice audio:", err);
+      }
+    };
+    if (generalSettings.enableVoiceSuccess !== false) {
+      playSuccessAudio();
+    }
+
+    // Auto-redirect to main screen after 1.2 seconds
+    const timer = setTimeout(() => {
+      handleDone();
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor={Theme.bgMain} />
       
       <View style={styles.container}>
+        {/* Infinite Spinning Background Dishes/Plates */}
+        <Animated.View style={[styles.bgDishContainer, { transform: [{ rotate: spin }] }]}>
+          <Ionicons name="restaurant" size={320} color="rgba(255, 107, 0, 0.04)" />
+        </Animated.View>
+        <Animated.View style={[styles.bgDishContainer2, { transform: [{ rotate: spin }] }]}>
+          <Ionicons name="pizza" size={240} color="rgba(22, 163, 74, 0.03)" />
+        </Animated.View>
+
+        {/* Floating food particles */}
+        {floatingFoods.map((item) => (
+          <Animated.View
+            key={item.id}
+            style={[
+              styles.floatingFood,
+              {
+                left: `${item.x}%`,
+                top: `${item.y}%`,
+                transform: [
+                  { scale: item.scale },
+                  { translateY: item.translateY },
+                ],
+                opacity: item.opacity,
+              },
+            ]}
+          >
+            <Ionicons name={item.icon} size={42} color={Theme.primary + "20"} />
+          </Animated.View>
+        ))}
+
         <View style={styles.card}>
           <View style={styles.iconContainer}>
             <Ionicons name="checkmark-circle" size={80} color={Theme.success} />
@@ -278,10 +460,6 @@ export default function PaymentSuccess() {
               <Text style={[styles.value, { color: Theme.primary }]}>{currencySymbol}{change}</Text>
             </View>
           </View>
-
-          <TouchableOpacity style={styles.doneBtn} onPress={handleDone} activeOpacity={0.8}>
-            <Text style={styles.doneText}>Done</Text>
-          </TouchableOpacity>
         </View>
       </View>
 
@@ -358,6 +536,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
+    position: "relative",
+    overflow: "hidden",
+  },
+  floatingFood: {
+    position: "absolute",
+    zIndex: 1,
+  },
+  bgDishContainer: {
+    position: "absolute",
+    zIndex: 0,
+    top: "-5%",
+    left: "-15%",
+    opacity: 0.8,
+  },
+  bgDishContainer2: {
+    position: "absolute",
+    zIndex: 0,
+    bottom: "-5%",
+    right: "-10%",
+    opacity: 0.8,
   },
   card: {
     width: "100%",
@@ -419,7 +617,7 @@ const styles = StyleSheet.create({
   },
   label: {
     color: Theme.textSecondary,
-    fontFamily: Fonts.medium,
+    fontFamily: Fonts.black,
     fontSize: 15,
   },
   value: {

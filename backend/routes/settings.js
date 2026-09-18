@@ -98,6 +98,46 @@ router.get("/", async (req, res) => {
       BEGIN
         ALTER TABLE AppSettings ADD EnableCookingInstructions BIT DEFAULT 1 WITH VALUES;
       END
+
+      IF NOT EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'AppSettings' AND COLUMN_NAME = 'EnableDirectPaymentToProcess'
+      )
+      BEGIN
+        ALTER TABLE AppSettings ADD EnableDirectPaymentToProcess BIT DEFAULT 0 WITH VALUES;
+      END
+
+      IF NOT EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'AppSettings' AND COLUMN_NAME = 'EnableSkipSummaryScreen'
+      )
+      BEGIN
+        ALTER TABLE AppSettings ADD EnableSkipSummaryScreen BIT DEFAULT 0 WITH VALUES;
+      END
+
+      IF NOT EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'AppSettings' AND COLUMN_NAME = 'EnableReceiptPrint'
+      )
+      BEGIN
+        ALTER TABLE AppSettings ADD EnableReceiptPrint BIT DEFAULT 1 WITH VALUES;
+      END
+
+      IF NOT EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'AppSettings' AND COLUMN_NAME = 'EnableVoiceSuccess'
+      )
+      BEGIN
+        ALTER TABLE AppSettings ADD EnableVoiceSuccess BIT DEFAULT 1 WITH VALUES;
+      END
+
+      IF NOT EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'AppSettings' AND COLUMN_NAME = 'EnableNotificationSound'
+      )
+      BEGIN
+        ALTER TABLE AppSettings ADD EnableNotificationSound BIT DEFAULT 1 WITH VALUES;
+      END
     `).catch(err => console.warn("Failed self-healing AppSettings column:", err.message));
 
     const settings = await getAppSettings();
@@ -109,6 +149,11 @@ router.get("/", async (req, res) => {
       EnableComboPrint: settings?.EnableComboPrint !== undefined ? (settings.EnableComboPrint ? 1 : 0) : 0,
       EnableRequestService: settings?.EnableRequestService !== undefined ? (settings.EnableRequestService ? 1 : 0) : 1,
       EnableCookingInstructions: settings?.EnableCookingInstructions !== undefined ? (settings.EnableCookingInstructions ? 1 : 0) : 1,
+      EnableDirectPaymentToProcess: settings?.EnableDirectPaymentToProcess !== undefined ? (settings.EnableDirectPaymentToProcess ? 1 : 0) : 0,
+      EnableSkipSummaryScreen: settings?.EnableSkipSummaryScreen !== undefined ? (settings.EnableSkipSummaryScreen ? 1 : 0) : 0,
+      EnableReceiptPrint: settings?.EnableReceiptPrint !== undefined ? (settings.EnableReceiptPrint ? 1 : 0) : 1,
+      EnableVoiceSuccess: settings?.EnableVoiceSuccess !== undefined ? (settings.EnableVoiceSuccess ? 1 : 0) : 1,
+      EnableNotificationSound: settings?.EnableNotificationSound !== undefined ? (settings.EnableNotificationSound ? 1 : 0) : 1,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -118,7 +163,7 @@ router.get("/", async (req, res) => {
 // 🔹 UPDATE Settings
 router.post("/update", async (req, res) => {
   try {
-    const { upiId, shopName, qrCodeUrl, enableKOT, enableKDS, enableCheckoutBill, enableCheckoutFlow, enableDirectProcessToPay, customerSideDisplay, enableGuestDetailsPopup, enableCashDrawer, SVCIdentification, enableKDSPrint, enableCombo, showLoyalty, showRewardPoints, showPromoCode, enableOnlinePayment, enableQROrderAutoPrint, enableComboPrint, enableRequestService, enableCookingInstructions } = req.body;
+    const { upiId, shopName, qrCodeUrl, enableKOT, enableKDS, enableCheckoutBill, enableCheckoutFlow, enableDirectProcessToPay, customerSideDisplay, enableGuestDetailsPopup, enableCashDrawer, SVCIdentification, enableKDSPrint, enableCombo, showLoyalty, showRewardPoints, showPromoCode, enableOnlinePayment, enableQROrderAutoPrint, enableComboPrint, enableRequestService, enableCookingInstructions, enableDirectPaymentToProcess, enableSkipSummaryScreen, enableReceiptPrint, enableVoiceSuccess, enableNotificationSound } = req.body;
     const pool = await poolPromise;
 
     // Use an UPSERT logic (Update if exists, Insert if not)
@@ -145,6 +190,11 @@ router.post("/update", async (req, res) => {
       .input("EnableComboPrint", sql.Bit, enableComboPrint !== undefined ? enableComboPrint : 0)
       .input("EnableRequestService", sql.Bit, enableRequestService !== undefined ? enableRequestService : 1)
       .input("EnableCookingInstructions", sql.Bit, enableCookingInstructions !== undefined ? enableCookingInstructions : 1)
+      .input("EnableDirectPaymentToProcess", sql.Bit, enableDirectPaymentToProcess !== undefined ? enableDirectPaymentToProcess : 0)
+      .input("EnableSkipSummaryScreen", sql.Bit, enableSkipSummaryScreen !== undefined ? enableSkipSummaryScreen : 0)
+      .input("EnableReceiptPrint", sql.Bit, enableReceiptPrint !== undefined ? enableReceiptPrint : 1)
+      .input("EnableVoiceSuccess", sql.Bit, enableVoiceSuccess !== undefined ? enableVoiceSuccess : 1)
+      .input("EnableNotificationSound", sql.Bit, enableNotificationSound !== undefined ? enableNotificationSound : 1)
       .query(`
         IF EXISTS (SELECT 1 FROM AppSettings)
         BEGIN
@@ -172,12 +222,17 @@ router.post("/update", async (req, res) => {
             EnableComboPrint = @EnableComboPrint,
             EnableRequestService = @EnableRequestService,
             EnableCookingInstructions = @EnableCookingInstructions,
+            EnableDirectPaymentToProcess = @EnableDirectPaymentToProcess,
+            EnableSkipSummaryScreen = @EnableSkipSummaryScreen,
+            EnableReceiptPrint = @EnableReceiptPrint,
+            EnableVoiceSuccess = @EnableVoiceSuccess,
+            EnableNotificationSound = @EnableNotificationSound,
             UpdatedOn = GETDATE()
         END
         ELSE
         BEGIN
-          INSERT INTO AppSettings (UPI_ID, ShopName, PayNow_QR_Url, EnableKOT, EnableKDS, EnableCheckoutBill, EnableCheckoutFlow, EnableDirectProcessToPay, CustomerSideDisplay, EnableGuestDetailsPopup, EnableCashDrawer, EnableKDSPrint, SVCIdentification, EnableCombo, ShowLoyalty, ShowRewardPoints, ShowPromoCode, EnableOnlinePayment, EnableQROrderAutoPrint, EnableComboPrint, EnableRequestService, EnableCookingInstructions, UpdatedOn)
-          VALUES (@UPI, @Shop, @QR, @EnableKOT, @EnableKDS, @EnableCheckoutBill, @EnableCheckoutFlow, @EnableDirectProcessToPay, @CustomerSideDisplay, @EnableGuestDetailsPopup, @EnableCashDrawer, @EnableKDSPrint, @SVCIdentification, @EnableCombo, @ShowLoyalty, @ShowRewardPoints, @ShowPromoCode, @EnableOnlinePayment, @EnableQROrderAutoPrint, @EnableComboPrint, @EnableRequestService, @EnableCookingInstructions, GETDATE())
+          INSERT INTO AppSettings (UPI_ID, ShopName, PayNow_QR_Url, EnableKOT, EnableKDS, EnableCheckoutBill, EnableCheckoutFlow, EnableDirectProcessToPay, CustomerSideDisplay, EnableGuestDetailsPopup, EnableCashDrawer, EnableKDSPrint, SVCIdentification, EnableCombo, ShowLoyalty, ShowRewardPoints, ShowPromoCode, EnableOnlinePayment, EnableQROrderAutoPrint, EnableComboPrint, EnableRequestService, EnableCookingInstructions, EnableDirectPaymentToProcess, EnableSkipSummaryScreen, EnableReceiptPrint, EnableVoiceSuccess, EnableNotificationSound, UpdatedOn)
+          VALUES (@UPI, @Shop, @QR, @EnableKOT, @EnableKDS, @EnableCheckoutBill, @EnableCheckoutFlow, @EnableDirectProcessToPay, @CustomerSideDisplay, @EnableGuestDetailsPopup, @EnableCashDrawer, @EnableKDSPrint, @SVCIdentification, @EnableCombo, @ShowLoyalty, @ShowRewardPoints, @ShowPromoCode, @EnableOnlinePayment, @EnableQROrderAutoPrint, @EnableComboPrint, @EnableRequestService, @EnableCookingInstructions, @EnableDirectPaymentToProcess, @EnableSkipSummaryScreen, @EnableReceiptPrint, @EnableVoiceSuccess, @EnableNotificationSound, GETDATE())
         END
       `);
 

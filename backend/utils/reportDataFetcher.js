@@ -42,6 +42,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
       sh.CashierId, 
       sh.BillNo, 
       sh.SER_NAME,
+      COALESCE(sh.entry_status, ro_cur.entry_status) AS entryStatus,
       sts.PayMode as RawPayMode,
       ISNULL(sts.SysAmount, sh.SysAmount) as SysAmount,
       sh.SubTotal as SubTotal,
@@ -57,6 +58,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
       sh.RoundedBy as RoundedBy,
       ISNULL(cct_sale.OutstandingAmount, 0) AS OutstandingAmount
     FROM SettlementHeader sh
+    LEFT JOIN RestaurantOrderCur ro_cur ON sh.BillNo = ro_cur.OrderNumber
     LEFT JOIN SettlementTotalSales sts ON sh.SettlementID = sts.SettlementID
     LEFT JOIN CustomerCreditTransactions cct_sale ON sh.SettlementID = cct_sale.SettlementId AND cct_sale.TransactionType = 'CREDIT_SALE'
     WHERE ${shWhere}
@@ -213,15 +215,16 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
   const totalOrders = totalTransactions;
 
   const paymentBreakdownTotal = Object.values(breakdown).reduce((sum, val) => sum + val, 0);
-  const totalCollections = (paymentBreakdownTotal - (breakdown["CREDIT"] || 0)) + memberPaymentsCollected + creditPaymentsCollected;
+  const totalCollections = (paymentBreakdownTotal - (breakdown["CREDIT"] || 0) - (breakdown["FOC"] || 0)) + memberPaymentsCollected + creditPaymentsCollected;
 
   const avgCheck = totalTransactions > 0 ? totalSales / totalTransactions : 0;
-  const avgItems = totalTransactions > 0 ? totalItems / totalTransactions : 0;
-  const perItem = totalItems > 0 ? totalSales / totalItems : 0;
+  let avgItems = totalTransactions > 0 ? totalItems / totalTransactions : 0;
+  let perItem = totalItems > 0 ? totalSales / totalItems : 0;
 
   const orderTypesTotal = dineInCount + takeawayCount;
   const dineInPct = orderTypesTotal > 0 ? (dineInCount / orderTypesTotal) * 100 : 0;
   const takeawayPct = orderTypesTotal > 0 ? (takeawayCount / orderTypesTotal) * 100 : 0;
+  const qrPct = totalTransactions > 0 ? (qrOrderCount / totalTransactions) * 100 : 0;
 
   // 3. Fetch category report (AppReport + ProfessionalReport union)
   const categoryQuery = `
@@ -230,13 +233,15 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         ISNULL(NULLIF(LTRIM(RTRIM(sid.CategoryName)), ''), ISNULL(cm.CategoryName, 'Unmapped')) AS categoryName,
         SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') <> 'VOIDED' THEN CAST(ISNULL(sid.Qty, 0) AS decimal(18, 3)) ELSE 0 END) AS totalQty,
         SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') = 'VOIDED' THEN CAST(ISNULL(sid.Qty, 0) AS decimal(18, 3)) ELSE 0 END) AS voidQty,
-        SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') <> 'VOIDED' THEN CAST(ISNULL(sid.Qty, 0) * ISNULL(sid.Price, 0) AS decimal(18, 2)) ELSE 0 END) AS totalAmount
+        SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') <> 'VOIDED' THEN CAST(ISNULL(sid.DiscountAmount, 0) + (ISNULL(sid.Qty, 0) * ISNULL(sid.Price, 0) * (ISNULL(sh.DiscountAmount, 0) / NULLIF(sh.SubTotal, 0))) AS decimal(18, 2)) ELSE 0 END) AS discountAmount,
+        SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') <> 'VOIDED' THEN CAST((ISNULL(sid.Qty, 0) * ISNULL(sid.Price, 0)) - (ISNULL(sid.DiscountAmount, 0) + (ISNULL(sid.Qty, 0) * ISNULL(sid.Price, 0) * (ISNULL(sh.DiscountAmount, 0) / NULLIF(sh.SubTotal, 0)))) AS decimal(18, 2)) ELSE 0 END) AS totalAmount
       FROM SettlementHeader sh
       INNER JOIN SettlementItemDetail sid ON sh.SettlementID = sid.SettlementID
       LEFT JOIN DishMaster d ON sid.DishId = d.DishId
       LEFT JOIN DishGroupMaster dg ON COALESCE(sid.DishGroupId, d.DishGroupId) = dg.DishGroupId
       LEFT JOIN CategoryMaster cm ON COALESCE(sid.CategoryId, dg.CategoryId) = cm.CategoryId
-      WHERE ${shWhere} AND ISNULL(sid.Qty, 0) > 0
+      WHERE ${shWhere} AND ISNULL(sid.Qty, 0) > 0 AND ISNULL(sh.IsCancelled, 0) = 0
+        AND EXISTS (SELECT 1 FROM SettlementTotalSales WHERE SettlementID = sh.SettlementID)
       GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(sid.CategoryName)), ''), ISNULL(cm.CategoryName, 'Unmapped'))
     ),
     LegacyReport AS (
@@ -244,6 +249,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         ISNULL(cm.CategoryName, 'Unmapped') AS categoryName,
         SUM(CAST(ISNULL(rod.Quantity, 0) AS decimal(18, 3))) AS totalQty,
         CAST(0 AS decimal(18, 3)) AS voidQty,
+        CAST(0 AS decimal(18, 2)) AS discountAmount,
         SUM(CAST(ISNULL(rod.TotalDetailLineAmount, 0) AS decimal(18, 2))) AS totalAmount
       FROM RestaurantOrderDetail rod
       INNER JOIN (
@@ -273,6 +279,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         ISNULL(cm.CategoryName, 'Unmapped') AS categoryName,
         SUM(CASE WHEN rod.StatusCode <> 0 THEN CAST(ISNULL(rod.Quantity, 0) AS decimal(18, 3)) ELSE 0 END) AS totalQty,
         SUM(CASE WHEN rod.StatusCode = 0 THEN CAST(ISNULL(rod.Quantity, 0) AS decimal(18, 3)) ELSE 0 END) AS voidQty,
+        CAST(0 AS decimal(18, 2)) AS discountAmount,
         SUM(CASE WHEN rod.StatusCode <> 0 THEN CAST(ISNULL(rod.TotalDetailLineAmount, 0) AS decimal(18, 2)) ELSE 0 END) AS totalAmount
       FROM RestaurantOrderDetail rod
       INNER JOIN RestaurantOrder ro ON rod.OrderId = ro.OrderId
@@ -287,13 +294,18 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         )
       GROUP BY ISNULL(cm.CategoryName, 'Unmapped')
     )
-    SELECT categoryName AS Category, SUM(totalQty) AS Qty, SUM(totalAmount) AS Sales
+    SELECT 
+      categoryName AS Category, 
+      SUM(totalQty) AS Qty, 
+      SUM(voidQty) AS Voided, 
+      SUM(discountAmount) AS Discount, 
+      SUM(totalAmount) AS Sales
     FROM (
-      SELECT CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM AppReport
+      SELECT CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(voidQty AS decimal(18,3)) AS voidQty, CAST(discountAmount AS decimal(18,2)) AS discountAmount, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM AppReport
       UNION ALL
-      SELECT CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM LegacyReport
+      SELECT CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(voidQty AS decimal(18,3)) AS voidQty, CAST(discountAmount AS decimal(18,2)) AS discountAmount, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM LegacyReport
       UNION ALL
-      SELECT CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM ProfessionalReport
+      SELECT CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(voidQty AS decimal(18,3)) AS voidQty, CAST(discountAmount AS decimal(18,2)) AS discountAmount, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM ProfessionalReport
     ) ReportRows
     GROUP BY categoryName
     HAVING SUM(totalQty) > 0 OR SUM(totalAmount) > 0
@@ -310,13 +322,16 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         ISNULL(NULLIF(LTRIM(RTRIM(sid.DishName)), ''), ISNULL(d.Name, 'Unknown')) AS dishName,
         ISNULL(NULLIF(LTRIM(RTRIM(sid.CategoryName)), ''), ISNULL(cm.CategoryName, 'Unmapped')) AS categoryName,
         SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') <> 'VOIDED' THEN CAST(ISNULL(sid.Qty, 0) AS decimal(18, 3)) ELSE 0 END) AS totalQty,
-        SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') <> 'VOIDED' THEN CAST(ISNULL(sid.Qty, 0) * ISNULL(sid.Price, 0) AS decimal(18, 2)) ELSE 0 END) AS totalAmount
+        SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') = 'VOIDED' THEN CAST(ISNULL(sid.Qty, 0) AS decimal(18, 3)) ELSE 0 END) AS voidQty,
+        SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') <> 'VOIDED' THEN CAST(ISNULL(sid.DiscountAmount, 0) + (ISNULL(sid.Qty, 0) * ISNULL(sid.Price, 0) * (ISNULL(sh.DiscountAmount, 0) / NULLIF(sh.SubTotal, 0))) AS decimal(18, 2)) ELSE 0 END) AS discountAmount,
+        SUM(CASE WHEN ISNULL(sid.Status, 'NORMAL') <> 'VOIDED' THEN CAST((ISNULL(sid.Qty, 0) * ISNULL(sid.Price, 0)) - (ISNULL(sid.DiscountAmount, 0) + (ISNULL(sid.Qty, 0) * ISNULL(sid.Price, 0) * (ISNULL(sh.DiscountAmount, 0) / NULLIF(sh.SubTotal, 0)))) AS decimal(18, 2)) ELSE 0 END) AS totalAmount
       FROM SettlementHeader sh
       INNER JOIN SettlementItemDetail sid ON sh.SettlementID = sid.SettlementID
       LEFT JOIN DishMaster d ON sid.DishId = d.DishId
       LEFT JOIN DishGroupMaster dg ON COALESCE(sid.DishGroupId, d.DishGroupId) = dg.DishGroupId
       LEFT JOIN CategoryMaster cm ON COALESCE(sid.CategoryId, dg.CategoryId) = cm.CategoryId
-      WHERE ${shWhere}
+      WHERE ${shWhere} AND ISNULL(sh.IsCancelled, 0) = 0
+        AND EXISTS (SELECT 1 FROM SettlementTotalSales WHERE SettlementID = sh.SettlementID)
       GROUP BY 
         ISNULL(NULLIF(LTRIM(RTRIM(sid.DishName)), ''), ISNULL(d.Name, 'Unknown')), 
         ISNULL(NULLIF(LTRIM(RTRIM(sid.CategoryName)), ''), ISNULL(cm.CategoryName, 'Unmapped'))
@@ -327,6 +342,8 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         ISNULL(cm.CategoryName, 'Unmapped') AS categoryName,
         ISNULL(dg.DishGroupName, 'Unmapped') AS subCategoryName,
         SUM(CAST(ISNULL(rod.Quantity, 0) AS decimal(18, 3))) AS totalQty,
+        CAST(0 AS decimal(18, 3)) AS voidQty,
+        CAST(0 AS decimal(18, 2)) AS discountAmount,
         SUM(CAST(ISNULL(rod.TotalDetailLineAmount, 0) AS decimal(18, 2))) AS totalAmount
       FROM RestaurantOrderDetail rod
       INNER JOIN (
@@ -359,6 +376,8 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         ISNULL(d.Name, 'Unknown') AS dishName,
         ISNULL(cm.CategoryName, 'Unmapped') AS categoryName,
         SUM(CASE WHEN rod.StatusCode <> 0 THEN CAST(ISNULL(rod.Quantity, 0) AS decimal(18, 3)) ELSE 0 END) AS totalQty,
+        SUM(CASE WHEN rod.StatusCode = 0 THEN CAST(ISNULL(rod.Quantity, 0) AS decimal(18, 3)) ELSE 0 END) AS voidQty,
+        CAST(0 AS decimal(18, 2)) AS discountAmount,
         SUM(CASE WHEN rod.StatusCode <> 0 THEN CAST(ISNULL(rod.TotalDetailLineAmount, 0) AS decimal(18, 2)) ELSE 0 END) AS totalAmount
       FROM RestaurantOrderDetail rod
       INNER JOIN RestaurantOrder ro ON rod.OrderId = ro.OrderId
@@ -373,13 +392,19 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
         )
       GROUP BY ISNULL(d.Name, 'Unknown'), ISNULL(cm.CategoryName, 'Unmapped')
     )
-    SELECT dishName AS Item, categoryName AS Category, SUM(totalQty) AS Qty, SUM(totalAmount) AS Sales
+    SELECT 
+      dishName AS Item, 
+      categoryName AS Category, 
+      SUM(totalQty) AS Qty, 
+      SUM(voidQty) AS Voided, 
+      SUM(discountAmount) AS Discount, 
+      SUM(totalAmount) AS Sales
     FROM (
-      SELECT CAST(dishName AS NVARCHAR(255)) AS dishName, CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM AppReport
+      SELECT CAST(dishName AS NVARCHAR(255)) AS dishName, CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(voidQty AS decimal(18,3)) AS voidQty, CAST(discountAmount AS decimal(18,2)) AS discountAmount, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM AppReport
       UNION ALL
-      SELECT CAST(dishName AS NVARCHAR(255)) AS dishName, CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM LegacyReport
+      SELECT CAST(dishName AS NVARCHAR(255)) AS dishName, CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(voidQty AS decimal(18,3)) AS voidQty, CAST(discountAmount AS decimal(18,2)) AS discountAmount, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM LegacyReport
       UNION ALL
-      SELECT CAST(dishName AS NVARCHAR(255)) AS dishName, CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM ProfessionalReport
+      SELECT CAST(dishName AS NVARCHAR(255)) AS dishName, CAST(categoryName AS NVARCHAR(255)) AS categoryName, CAST(totalQty AS decimal(18,3)) AS totalQty, CAST(voidQty AS decimal(18,3)) AS voidQty, CAST(discountAmount AS decimal(18,2)) AS discountAmount, CAST(totalAmount AS decimal(18,2)) AS totalAmount FROM ProfessionalReport
     ) ReportRows
     GROUP BY dishName, categoryName
     HAVING SUM(totalQty) > 0 OR SUM(totalAmount) > 0
@@ -388,6 +413,11 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
 
   const dishResult = await pool.request().query(dishQuery);
   const itemsList = dishResult.recordset || [];
+
+  // Recalculate totalItems based on the actual sum of category quantities to ensure 100% consistency across cards and reports
+  totalItems = categoriesList.reduce((sum, c) => sum + (Number(c.Qty) || 0), 0);
+  avgItems = totalTransactions > 0 ? totalItems / totalTransactions : 0;
+  perItem = totalItems > 0 ? totalSales / totalItems : 0;
 
   const artistQuery = `
     SELECT 
@@ -471,6 +501,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
 
     // Summary Metrics
     totalSales,
+    focSales: breakdown["FOC"] || 0,
     totalCollections,
     creditPaymentsCollected,
     memberPaymentsCollected,
@@ -531,8 +562,10 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
     orderTypes: {
       dineInCount,
       takeawayCount,
+      qrOrderCount,
       dineInPct,
-      takeawayPct
+      takeawayPct,
+      qrPct
     },
 
     // Trend

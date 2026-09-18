@@ -23,6 +23,7 @@ import { useGeneralSettingsStore } from "../stores/generalSettingsStore";
 import { useToast } from "../components/Toast";
 import { API_URL } from "../constants/Config";
 import { useAuthStore } from "../stores/authStore";
+import { BlurView } from "expo-blur";
 
 // ── SLEEK COMPACT ANIMATED SWITCH COMPONENT ──
 interface CustomSwitchProps {
@@ -106,6 +107,11 @@ export default function GeneralSettingsScreen() {
   const [enableComboPrint, setEnableComboPrint] = useState(settings.enableComboPrint !== undefined ? settings.enableComboPrint : false);
   const [enableRequestService, setEnableRequestService] = useState(settings.enableRequestService !== undefined ? settings.enableRequestService : true);
   const [enableCookingInstructions, setEnableCookingInstructions] = useState(settings.enableCookingInstructions !== undefined ? settings.enableCookingInstructions : true);
+  const [enableDirectPaymentToProcess, setEnableDirectPaymentToProcess] = useState(settings.enableDirectPaymentToProcess !== undefined ? settings.enableDirectPaymentToProcess : false);
+  const [enableSkipSummaryScreen, setEnableSkipSummaryScreen] = useState(settings.enableSkipSummaryScreen !== undefined ? settings.enableSkipSummaryScreen : false);
+  const [enableReceiptPrint, setEnableReceiptPrint] = useState(settings.enableReceiptPrint !== undefined ? settings.enableReceiptPrint : true);
+  const [enableVoiceSuccess, setEnableVoiceSuccess] = useState(settings.enableVoiceSuccess !== undefined ? settings.enableVoiceSuccess : true);
+  const [enableNotificationSound, setEnableNotificationSound] = useState(settings.enableNotificationSound !== undefined ? settings.enableNotificationSound : true);
 
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordValue, setPasswordValue] = useState("");
@@ -135,61 +141,44 @@ export default function GeneralSettingsScreen() {
     setEnableComboPrint(settings.enableComboPrint !== undefined ? settings.enableComboPrint : false);
     setEnableRequestService(settings.enableRequestService !== undefined ? settings.enableRequestService : true);
     setEnableCookingInstructions(settings.enableCookingInstructions !== undefined ? settings.enableCookingInstructions : true);
+    let initialCheckoutFlow = settings.enableCheckoutFlow !== undefined ? settings.enableCheckoutFlow : true;
+    let initialDirectProcess = settings.enableDirectProcessToPay !== undefined ? settings.enableDirectProcessToPay : false;
+    let initialDirectPayment = settings.enableDirectPaymentToProcess !== undefined ? settings.enableDirectPaymentToProcess : false;
 
-    let initialCheckoutFlow = settings.enableCheckoutFlow;
-    let initialDirectProcess = settings.enableDirectProcessToPay;
-
-    if ((initialCheckoutFlow && initialDirectProcess) || (!initialCheckoutFlow && !initialDirectProcess)) {
+    // Enforce mutual exclusivity on load: if more than one is true, resolve conflict
+    if (initialCheckoutFlow) {
+      initialDirectProcess = false;
+      initialDirectPayment = false;
+    } else if (initialDirectProcess) {
+      initialCheckoutFlow = false;
+      initialDirectPayment = false;
+    } else if (initialDirectPayment) {
+      initialCheckoutFlow = false;
+      initialDirectProcess = false;
+    } else {
+      // If all are false, default to standard Checkout Flow
       initialCheckoutFlow = true;
       initialDirectProcess = false;
+      initialDirectPayment = false;
     }
 
     setEnableCheckoutFlow(initialCheckoutFlow);
     setEnableDirectProcessToPay(initialDirectProcess);
+    setEnableDirectPaymentToProcess(initialDirectPayment);
+    setEnableSkipSummaryScreen(settings.enableSkipSummaryScreen !== undefined ? settings.enableSkipSummaryScreen : false);
+    setEnableReceiptPrint(settings.enableReceiptPrint !== undefined ? settings.enableReceiptPrint : true);
+    setEnableVoiceSuccess(settings.enableVoiceSuccess !== undefined ? settings.enableVoiceSuccess : true);
+    setEnableNotificationSound(settings.enableNotificationSound !== undefined ? settings.enableNotificationSound : true);
   }, [settings]);
 
-  const handleToggleCashDrawer = (val: boolean) => {
-    setPendingCashDrawerValue(val);
-    setPasswordValue("");
-    setShowPasswordModal(true);
-  };
-
-  const handlePasswordVerify = async () => {
-    if (!passwordValue) {
-      showToast({ type: "warning", message: "Please enter password" });
-      return;
-    }
-    setVerifyingPassword(true);
-    try {
-      const verifyRes = await fetch(`${API_URL}/api/auth/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: passwordValue }),
-      });
-      const verifyData = await verifyRes.json();
-      if (verifyData.success) {
-        if (pendingCashDrawerValue !== null) {
-          setEnableCashDrawer(pendingCashDrawerValue);
-        }
-        setShowPasswordModal(false);
-        showToast({ type: "success", message: "Access Unlocked" });
-      } else {
-        Alert.alert("Access Denied", "Incorrect admin password");
-      }
-    } catch (err) {
-      Alert.alert("Error", "Could not verify password. Check connection.");
-    } finally {
-      setVerifyingPassword(false);
-    }
-  };
+  const [passwordAction, setPasswordAction] = useState<"CASHDRAWER" | "SAVE" | null>(null);
+  const [passwordError, setPasswordError] = useState("");
 
   const handleToggleCheckoutFlow = (val: boolean) => {
     if (val) {
       setEnableCheckoutFlow(true);
       setEnableDirectProcessToPay(false);
-    } else {
-      setEnableCheckoutFlow(false);
-      setEnableDirectProcessToPay(true);
+      setEnableDirectPaymentToProcess(false);
     }
   };
 
@@ -197,13 +186,27 @@ export default function GeneralSettingsScreen() {
     if (val) {
       setEnableDirectProcessToPay(true);
       setEnableCheckoutFlow(false);
-    } else {
-      setEnableDirectProcessToPay(false);
-      setEnableCheckoutFlow(true);
+      setEnableDirectPaymentToProcess(false);
     }
   };
 
-  const handleSave = async () => {
+  const handleToggleDirectPaymentToProcess = (val: boolean) => {
+    if (val) {
+      setEnableDirectPaymentToProcess(true);
+      setEnableCheckoutFlow(false);
+      setEnableDirectProcessToPay(false);
+    }
+  };
+
+  const handleToggleCashDrawer = (val: boolean) => {
+    setPendingCashDrawerValue(val);
+    setPasswordValue("");
+    setPasswordError("");
+    setPasswordAction("CASHDRAWER");
+    setShowPasswordModal(true);
+  };
+
+  const executeSave = async () => {
     setSaving(true);
     const success = await updateSettings({
       enableKOT,
@@ -225,6 +228,11 @@ export default function GeneralSettingsScreen() {
       enableComboPrint,
       enableRequestService,
       enableCookingInstructions,
+      enableDirectPaymentToProcess,
+      enableSkipSummaryScreen,
+      enableReceiptPrint,
+      enableVoiceSuccess,
+      enableNotificationSound,
     });
     setSaving(false);
 
@@ -234,6 +242,45 @@ export default function GeneralSettingsScreen() {
     } else {
       showToast({ type: "error", message: "Failed to save settings. Please try again." });
     }
+  };
+
+  const handlePasswordVerify = async () => {
+    if (!passwordValue) {
+      setPasswordError("Please enter password");
+      return;
+    }
+    setVerifyingPassword(true);
+    setPasswordError("");
+    try {
+      const verifyRes = await fetch(`${API_URL}/api/auth/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: passwordValue, role: "ADMIN" }),
+      });
+      const verifyData = await verifyRes.json();
+      if (verifyData.success) {
+        setShowPasswordModal(false);
+        if (passwordAction === "CASHDRAWER" && pendingCashDrawerValue !== null) {
+          setEnableCashDrawer(pendingCashDrawerValue);
+          showToast({ type: "success", message: "Access Unlocked" });
+        } else if (passwordAction === "SAVE") {
+          await executeSave();
+        }
+      } else {
+        setPasswordError("Incorrect admin password");
+      }
+    } catch (err) {
+      setPasswordError("Could not verify password. Check connection.");
+    } finally {
+      setVerifyingPassword(false);
+    }
+  };
+
+  const handleSavePrompt = () => {
+    setPasswordValue("");
+    setPasswordError("");
+    setPasswordAction("SAVE");
+    setShowPasswordModal(true);
   };
 
   const sections = [
@@ -331,11 +378,32 @@ export default function GeneralSettingsScreen() {
           onToggle: handleToggleDirectProcessToPay,
         },
         {
+          title: "Enable Direct Payment to Process",
+          desc: "Skip the Checkout screen and directly proceed to Process Payment.",
+          icon: "arrow-forward-outline",
+          value: enableDirectPaymentToProcess,
+          onToggle: handleToggleDirectPaymentToProcess,
+        },
+        {
+          title: "Skip Summary Screen",
+          desc: "Skip the Summary screen and continue directly to the checkout/payment flow.",
+          icon: "play-forward-outline",
+          value: enableSkipSummaryScreen,
+          onToggle: setEnableSkipSummaryScreen,
+        },
+        {
           title: "Enable Cash Drawer Module",
           desc: "Enable checkout cashbox opening triggers.",
           icon: "cash-outline",
           value: enableCashDrawer,
           onToggle: handleToggleCashDrawer,
+        },
+        {
+          title: "Print Receipt",
+          desc: "Automatically print receipt on payment without showing prompt. If OFF, skip printing and prompt.",
+          icon: "print-outline",
+          value: enableReceiptPrint,
+          onToggle: setEnableReceiptPrint,
         },
       ]
     },
@@ -391,6 +459,26 @@ export default function GeneralSettingsScreen() {
           icon: "pricetag-outline",
           value: showPromoCode,
           onToggle: setShowPromoCode,
+        },
+      ]
+    },
+    {
+      title: "Audio & Voice Alerts",
+      icon: "volume-high-outline",
+      items: [
+        {
+          title: "Voice Announcements",
+          desc: "Play customer success 'Thank you' voice message on successful payment.",
+          icon: "mic-outline",
+          value: enableVoiceSuccess,
+          onToggle: setEnableVoiceSuccess,
+        },
+        {
+          title: "Notification Sounds",
+          desc: "Play chime sounds when new orders or notifications are received.",
+          icon: "notifications-outline",
+          value: enableNotificationSound,
+          onToggle: setEnableNotificationSound,
         },
       ]
     }
@@ -479,7 +567,7 @@ export default function GeneralSettingsScreen() {
 
         <TouchableOpacity
           style={[styles.saveBtn, (saving || loading) && { opacity: 0.7 }]}
-          onPress={handleSave}
+          onPress={handleSavePrompt}
           disabled={saving || loading}
           activeOpacity={0.8}
         >
@@ -491,34 +579,99 @@ export default function GeneralSettingsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Admin Password Modal for Cash Drawer toggle verification */}
+      {/* Admin Password Modal for settings verification */}
       <Modal
         visible={showPasswordModal}
         transparent
         animationType="fade"
         onRequestClose={() => setShowPasswordModal(false)}
       >
-        <View style={styles.pwOverlay}>
-          <View style={styles.pwModalContent}>
-            <View style={styles.pwHeader}>
-              <Text style={styles.pwTitle}>Admin Verification Required</Text>
-              <TouchableOpacity onPress={() => setShowPasswordModal(false)} style={styles.pwClose}>
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={[styles.modalContent, { width: 360, padding: 24, borderRadius: 20 }]}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: Theme.primary + "15", justifyContent: "center", alignItems: "center" }}>
+                  <Ionicons name="lock-closed" size={18} color={Theme.primary} />
+                </View>
+                <Text style={{ fontSize: 16, fontFamily: Fonts.black, color: Theme.textPrimary }}>
+                  Admin Verification
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowPasswordModal(false)} style={{ padding: 4 }}>
                 <Ionicons name="close" size={20} color={Theme.textSecondary} />
               </TouchableOpacity>
             </View>
-            <View style={styles.pwBody}>
-              <Text style={styles.pwDesc}>Please enter admin password to unlock Cash Drawer settings.</Text>
-              <TextInput
-                style={styles.pwInput}
-                secureTextEntry
-                placeholder="Enter password..."
-                value={passwordValue}
-                onChangeText={setPasswordValue}
-                onSubmitEditing={handlePasswordVerify}
-                autoFocus
-              />
+
+            <Text style={{ fontSize: 13, fontFamily: Fonts.medium, color: Theme.textSecondary, marginBottom: 18, lineHeight: 18 }}>
+              {passwordAction === "SAVE"
+                ? "Please enter admin password to save General Settings changes."
+                : "Please enter admin password to unlock Cash Drawer settings."}
+            </Text>
+
+            <TextInput
+              style={{
+                height: 46,
+                borderWidth: 1.5,
+                borderColor: passwordError ? "#EF4444" : Theme.border + "60",
+                borderRadius: 12,
+                paddingHorizontal: 14,
+                fontSize: 15,
+                color: Theme.textPrimary,
+                fontFamily: Fonts.bold,
+                backgroundColor: "#FAF7F2",
+                marginBottom: passwordError ? 6 : 20,
+                textAlign: "center"
+              }}
+              secureTextEntry
+              placeholder="••••••••"
+              placeholderTextColor={Theme.textSecondary + "60"}
+              value={passwordValue}
+              onChangeText={(val) => {
+                setPasswordValue(val);
+                if (passwordError) setPasswordError("");
+              }}
+              onSubmitEditing={handlePasswordVerify}
+              autoFocus
+            />
+
+            {!!passwordError && (
+              <Text style={{ color: "#EF4444", fontSize: 12, fontFamily: Fonts.bold, textAlign: "center", marginBottom: 16 }}>
+                {passwordError}
+              </Text>
+            )}
+
+            <View style={{ flexDirection: "row", gap: 12 }}>
               <TouchableOpacity
-                style={styles.pwBtn}
+                onPress={() => setShowPasswordModal(false)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  borderWidth: 1.5,
+                  borderColor: Theme.border + "80",
+                  backgroundColor: "#fff",
+                  alignItems: "center",
+                  justifyContent: "center"
+                }}
+              >
+                <Text style={{ fontSize: 13, fontFamily: Fonts.bold, color: Theme.textSecondary }}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{
+                  flex: 1.2,
+                  backgroundColor: Theme.primary,
+                  borderRadius: 12,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  paddingVertical: 12,
+                  shadowColor: Theme.primary,
+                  shadowOffset: { width: 0, height: 3 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 6,
+                  elevation: 3
+                }}
                 onPress={handlePasswordVerify}
                 disabled={verifyingPassword}
                 activeOpacity={0.8}
@@ -526,7 +679,7 @@ export default function GeneralSettingsScreen() {
                 {verifyingPassword ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.pwBtnText}>Verify Password</Text>
+                  <Text style={{ color: "#fff", fontSize: 13, fontFamily: Fonts.black }}>Confirm</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -799,16 +952,23 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.primary,
     borderRadius: 8,
     alignItems: "center",
-    justifyContent: "center",
-    shadowColor: Theme.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
     shadowRadius: 6,
     elevation: 3,
   },
-  pwBtnText: {
-    fontSize: 14,
-    fontFamily: Fonts.bold,
-    color: "#fff",
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 24,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 8,
   },
 });

@@ -230,7 +230,7 @@ SplashScreen.preventAutoHideAsync();
 
 import { useGlobalSocketSync } from "@/hooks/useGlobalSocketSync";
 import { API_URL } from "@/constants/Config";
-import { setApiUrl } from "@unipro/customer-display";
+import { setApiUrl } from "@/stores/paymentSettingsStore";
 
 // Propagate API URL to local package stores
 setApiUrl(API_URL);
@@ -437,6 +437,7 @@ export default function RootLayout() {
   const segments = useSegments();
   const user = useAuthStore((s) => s.user);
 
+
   // 🌐 SILENT API WAKE-UP & CONNECTION PRE-WARM
   useEffect(() => {
     const warmupAPI = async () => {
@@ -575,6 +576,7 @@ export default function RootLayout() {
             <Stack.Screen name="loyaltyConfig" />
             <Stack.Screen name="terminal-settings" />
             <Stack.Screen name="customer-display" />
+            <Stack.Screen name="table-master" />
           </Stack>
           <StatusBar style="light" />
         </ToastProvider>

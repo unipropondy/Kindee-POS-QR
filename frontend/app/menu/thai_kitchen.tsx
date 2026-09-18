@@ -28,6 +28,7 @@ import {
 } from "react-native-safe-area-context";
 import CartSidebar from "../../components/CartSidebar";
 import ComboCustomizer from "../../components/ComboCustomizer";
+import WindowControls from "../../components/WindowControls";
 import { useToast } from "../../components/Toast";
 import { Skeleton } from "../../components/ui/Skeleton";
 import UniversalPrinter from "../../components/UniversalPrinter";
@@ -610,11 +611,7 @@ export default function MenuScreen() {
     >
       <TouchableOpacity
         onPress={() => {
-          if (router.canGoBack()) {
-            router.back();
-          } else {
-            router.replace("/(tabs)/category");
-          }
+          router.replace("/(tabs)/category");
         }}
         style={[
           styles.backBtn,
@@ -656,6 +653,7 @@ export default function MenuScreen() {
       </View>
 
       <View style={styles.headerRightActions}>
+        <WindowControls buttonStyle={styles.headerBillBtn} />
         <TouchableOpacity
           style={[
             styles.headerBillBtn,
@@ -945,6 +943,7 @@ export default function MenuScreen() {
           KitchenTypeCode: dish.KitchenTypeCode || currentKitchenCode,
           isServiceCharge: dish.isServiceCharge,
           IsOpenItem: dish.IsOpenItem,
+          takeawayCharge: dish.takeawayCharge ?? dish.TakeawayCharge,
         });
       };
 
@@ -1196,6 +1195,7 @@ export default function MenuScreen() {
         KitchenTypeCode: selectedDish.KitchenTypeCode || currentKitchenCode,
         splitMembers: selectedDish.splitMembers || undefined,
         isServiceCharge: selectedDish.isServiceCharge,
+        takeawayCharge: selectedDish.takeawayCharge ?? selectedDish.TakeawayCharge,
       } as any);
 
     }
@@ -1233,6 +1233,7 @@ export default function MenuScreen() {
       KitchenTypeCode: dish.KitchenTypeCode || dish._kitchenCode,
       IsOpenItem: dish.IsOpenItem,
       isServiceCharge: dish.isServiceCharge,
+      takeawayCharge: dish.takeawayCharge ?? dish.TakeawayCharge,
     });
 
     // Reset
@@ -1564,6 +1565,7 @@ export default function MenuScreen() {
                       name: `${selectedSplitDish.Name} - ${member.Name}`,
                       songName: songName,
                       price: shareAmount,
+                      takeawayCharge: selectedSplitDish.takeawayCharge ?? selectedSplitDish.TakeawayCharge,
                     } as any);
                   });
 

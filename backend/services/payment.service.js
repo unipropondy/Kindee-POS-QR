@@ -4,6 +4,16 @@ const sql = require("mssql");
 const config = require('../config');
 const YeahPayService = require('./yeahpay.service');
 
+const toGuidOrNull = (value) => {
+  if (!value) return null;
+  const str = String(value).trim();
+  const guidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  if (guidRegex.test(str)) {
+    return str;
+  }
+  return null;
+};
+
 async function processSplitPayments({
   referenceType,
   referenceId,
@@ -64,7 +74,9 @@ async function processSplitPayments({
     let isYeahPay = false;
 
     // ✅✅✅ CRITICAL CHECK - YeahPay Enabled?
-    if (dbPaymode.YeahPayEnabled && dbPaymode.DeviceSN) {
+    // Skip terminal call if payment was already processed via /api/yeahpay/* endpoint
+    const _terminalAlreadyDone = payment.isTerminalAlreadyProcessed === true;
+    if (dbPaymode.YeahPayEnabled && dbPaymode.DeviceSN && !_terminalAlreadyDone) {
       
       isYeahPay = true;
       console.log(`🔄 [YEAHPAY] 🔥🔥🔥 YeahPay ENABLED for ${payModeName}`);
@@ -88,16 +100,23 @@ async function processSplitPayments({
         clientPrivateKeyPem: config.clientPrivateKeyPem
       });
 
+      // ── Determine YeahPay action using EXACT mode name ──────────────────────
+      // Use exact normalized comparisons — never .includes() — so "Yeahpay Paynow"
+      // and "Yeahpay Card" never bleed into each other's API call.
+      const _pmNorm = payModeName.trim().toUpperCase();
+      const _isYeahPayPayNow = _pmNorm === 'YEAHPAY PAYNOW';
+      const _isYeahPayCard   = _pmNorm === 'YEAHPAY CARD';
+
       // ✅ DETERMINE ACTION
       let action;
-      if (payModeName.toLowerCase().includes('paynow')) {
+      if (_isYeahPayPayNow) {
         action = 'TRADE.QRCODE.PayNowPay';
         console.log(`🔄 [YEAHPAY] Action: PayNow Payment`);
-      } else if (payModeName.toLowerCase().includes('card')) {
+      } else if (_isYeahPayCard) {
         action = 'TRADE.CARD.CONSUME';
         console.log(`🔄 [YEAHPAY] Action: Card Payment`);
       } else {
-        throw new Error(`YeahPay not supported for ${payModeName}`);
+        throw new Error(`YeahPay not supported for payment mode: ${payModeName}`);
       }
 
       // ✅✅✅ CALL YEAHPAY API
@@ -106,22 +125,22 @@ async function processSplitPayments({
         console.log(`🔄 [YEAHPAY] Action: ${action}`);
         console.log(`🔄 [YEAHPAY] Amount: ${amount}`);
         console.log(`🔄 [YEAHPAY] bizOrderId: ${referenceId}`);
-        
-if (payModeName.toLowerCase().includes('paynow')) {
-    gatewayResponse = await yeahpay.processPayNowPayment({
-        amount: amount,
-        deviceSn: dbPaymode.DeviceSN,
-        salt: dbPaymode.DeviceSalt,
-        appId: config.appId
-    });
-} else if (payModeName.toLowerCase().includes('card')) {
-    gatewayResponse = await yeahpay.processCardPayment({
-        amount: amount,
-        deviceSn: dbPaymode.DeviceSN,
-        salt: dbPaymode.DeviceSalt,
-        appId: config.appId
-    });
-}
+
+        if (_isYeahPayPayNow) {
+            gatewayResponse = await yeahpay.processPayNowPayment({
+                amount: amount,
+                deviceSn: dbPaymode.DeviceSN,
+                salt: dbPaymode.DeviceSalt,
+                appId: config.appId
+            });
+        } else if (_isYeahPayCard) {
+            gatewayResponse = await yeahpay.processCardPayment({
+                amount: amount,
+                deviceSn: dbPaymode.DeviceSN,
+                salt: dbPaymode.DeviceSalt,
+                appId: config.appId
+            });
+        }
 
         console.log(`✅ [YEAHPAY] Response received:`, JSON.stringify(gatewayResponse));
 
@@ -190,9 +209,13 @@ if (!gatewayResponse.success) {
         throw apiError;
       }
     } else {
-      console.log(`ℹ️ [YEAHPAY] NOT enabled for ${payModeName}`);
-      console.log(`   YeahPayEnabled: ${dbPaymode.YeahPayEnabled}`);
-      console.log(`   DeviceSN: ${dbPaymode.DeviceSN || 'NULL'}`);
+      if (_terminalAlreadyDone) {
+        console.log(`✅ [YEAHPAY] Terminal already processed for ${payModeName} — skipping duplicate API call, saving to DB only.`);
+      } else {
+        console.log(`ℹ️ [YEAHPAY] NOT enabled for ${payModeName}`);
+        console.log(`   YeahPayEnabled: ${dbPaymode.YeahPayEnabled}`);
+        console.log(`   DeviceSN: ${dbPaymode.DeviceSN || 'NULL'}`);
+      }
     }
 
     // ============================================================
@@ -201,11 +224,11 @@ if (!gatewayResponse.success) {
     const detailReq = new sql.Request(transaction);
     detailReq
       .input("ReferenceType", sql.NVarChar(50), referenceType)
-      .input("ReferenceId", sql.UniqueIdentifier, referenceId)
+      .input("ReferenceId", sql.UniqueIdentifier, toGuidOrNull(referenceId))
       .input("PayModeId", sql.Int, payModeId)
       .input("Amount", sql.Decimal(18, 2), amount)
       .input("ReferenceNo", sql.NVarChar(100), gatewayReferenceNo || referenceNo)
-      .input("CreatedBy", sql.UniqueIdentifier, cashierId);
+      .input("CreatedBy", sql.UniqueIdentifier, toGuidOrNull(cashierId));
 
     await detailReq.query(`
       INSERT INTO [dbo].[PaymentTransactionDetails] (
@@ -216,6 +239,56 @@ if (!gatewayResponse.success) {
         @ReferenceNo, GETDATE(), @CreatedBy
       )
     `);
+
+    // ============================================================
+    // 🆕 AUTO CASH IN ENTRY FOR CASH PAYMENTS
+    // ============================================================
+    const isCashMode = payModeName.toUpperCase().trim() === 'CASH';
+    if (isCashMode) {
+      let startDate = null;
+      const activeDayRes = await transaction.request().query("SELECT TOP 1 StartDate FROM DateEntry ORDER BY CreatedDate DESC");
+      if (activeDayRes.recordset.length > 0) {
+        startDate = activeDayRes.recordset[0].StartDate;
+      }
+
+      let cashierName = 'Admin';
+      if (cashierId && cashierId !== '00000000-0000-0000-0000-000000000000') {
+        const userRes = await transaction.request()
+          .input("UserId", sql.UniqueIdentifier, cashierId)
+          .query("SELECT TOP 1 UserName FROM UserMaster WHERE UserId = @UserId");
+        if (userRes.recordset.length > 0) {
+          cashierName = userRes.recordset[0].UserName;
+        }
+      }
+
+      let terminalCode = '';
+      if (referenceType === 'BILL') {
+        const termRes = await transaction.request()
+          .input("SettlementID", sql.UniqueIdentifier, referenceId)
+          .query("SELECT TOP 1 TerminalCode FROM SettlementHeader WHERE SettlementID = @SettlementID");
+        terminalCode = termRes.recordset[0]?.TerminalCode || '';
+      }
+
+      const dateStr = now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Singapore' }).replace(/-/g, '');
+      const randId = Math.floor(1000 + Math.random() * 9000);
+      const cashInNo = `CI-${dateStr}-${randId}`;
+
+      const cashInReq = new sql.Request(transaction);
+      await cashInReq
+        .input('CashInNo', sql.VarChar, cashInNo)
+        .input('Amount', sql.Decimal(18, 2), amount)
+        .input('Reason', sql.VarChar, referenceType === 'MEMBER' ? 'Ledger Payment' : 'Cash In')
+        .input('Remarks', sql.VarChar, `Auto Cash In from ${referenceType}: ${referenceId}`)
+        .input('PaymentMode', sql.VarChar, 'Cash')
+        .input('ReferenceNo', sql.VarChar, String(referenceId))
+        .input('TerminalCode', sql.VarChar, terminalCode)
+        .input('CreatedBy', sql.VarChar, cashierName)
+        .input('startDate', sql.Date, startDate)
+        .query(`
+          INSERT INTO CashInEntry (CashInNo, CashInDate, Amount, Reason, Remarks, PaymentMode, ReferenceNo, TerminalCode, CreatedBy, CreatedOn, start_date)
+          VALUES (@CashInNo, GETDATE(), @Amount, @Reason, @Remarks, @PaymentMode, @ReferenceNo, @TerminalCode, @CreatedBy, GETDATE(), @startDate)
+        `);
+    }
 
     // ============================================================
     // 4️⃣ If BILL, write to legacy tables
@@ -231,16 +304,16 @@ if (!gatewayResponse.success) {
       const legacyReq = new sql.Request(transaction);
 
       await legacyReq
-        .input("RestaurantBillId", sql.UniqueIdentifier, referenceId)
-        .input("PaymentOrderId", sql.UniqueIdentifier, orderId)
+        .input("RestaurantBillId", sql.UniqueIdentifier, toGuidOrNull(referenceId))
+        .input("PaymentOrderId", sql.UniqueIdentifier, toGuidOrNull(orderId))
         .input("BilledFor", sql.Int, 1)
         .input("PaymentType", sql.Int, 1)
         .input("Paymode", sql.Int, payModeId)
         .input("Amount", sql.Decimal(18, 2), amount)
         .input("ReferenceNo", sql.VarChar(100), gatewayReferenceNo || referenceNo)
         .input("Remarks", sql.VarChar(500), payModeName + (gatewayResponse ? ' (Gateway)' : ''))
-        .input("BusinessUnitId", sql.UniqueIdentifier, businessUnitId)
-        .input("CreatedBy", sql.UniqueIdentifier, cashierId)
+        .input("BusinessUnitId", sql.UniqueIdentifier, toGuidOrNull(businessUnitId))
+        .input("CreatedBy", sql.UniqueIdentifier, toGuidOrNull(cashierId))
         .input("startDate", sql.Date, startDate)
         .query(`
           DECLARE @PayId UNIQUEIDENTIFIER = NEWID();
@@ -322,8 +395,8 @@ if (!gatewayResponse.success) {
 async function logGatewayTransaction(data, transaction) {
   const request = new sql.Request(transaction);
   await request
-    .input('SettlementId', sql.UniqueIdentifier, data.settlementId || null)
-    .input('MemberId', sql.UniqueIdentifier, data.memberId || null)
+    .input('SettlementId', sql.UniqueIdentifier, toGuidOrNull(data.settlementId))
+    .input('MemberId', sql.UniqueIdentifier, toGuidOrNull(data.memberId))
     .input('PayModeId', sql.Int, data.payModeId)
     .input('DeviceSN', sql.NVarChar(100), data.deviceSn)
     .input('RequestPayload', sql.NVarChar(sql.MAX), data.requestPayload || '')

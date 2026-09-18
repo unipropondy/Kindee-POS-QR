@@ -23,6 +23,11 @@ export interface GeneralSettings {
   enableComboPrint: boolean;
   enableRequestService: boolean;
   enableCookingInstructions: boolean;
+  enableDirectPaymentToProcess: boolean;
+  enableSkipSummaryScreen: boolean;
+  enableReceiptPrint: boolean;
+  enableVoiceSuccess: boolean;
+  enableNotificationSound: boolean;
 }
 
 interface GeneralSettingsState {
@@ -55,6 +60,11 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
         enableComboPrint: false,
         enableRequestService: true,
         enableCookingInstructions: true,
+        enableDirectPaymentToProcess: false,
+        enableSkipSummaryScreen: false,
+        enableReceiptPrint: true,
+        enableVoiceSuccess: true,
+        enableNotificationSound: true,
       },
       loading: false,
 
@@ -87,6 +97,11 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
                 enableComboPrint: data.EnableComboPrint !== undefined ? Boolean(data.EnableComboPrint) : false,
                 enableRequestService: data.EnableRequestService !== undefined ? Boolean(data.EnableRequestService) : true,
                 enableCookingInstructions: data.EnableCookingInstructions !== undefined ? Boolean(data.EnableCookingInstructions) : true,
+                enableDirectPaymentToProcess: data.EnableDirectPaymentToProcess !== undefined ? Boolean(data.EnableDirectPaymentToProcess) : false,
+                enableSkipSummaryScreen: data.EnableSkipSummaryScreen !== undefined ? Boolean(data.EnableSkipSummaryScreen) : false,
+                enableReceiptPrint: data.EnableReceiptPrint !== undefined ? Boolean(data.EnableReceiptPrint) : true,
+                enableVoiceSuccess: data.EnableVoiceSuccess !== undefined ? Boolean(data.EnableVoiceSuccess) : true,
+                enableNotificationSound: data.EnableNotificationSound !== undefined ? Boolean(data.EnableNotificationSound) : true,
               },
             }));
           }
@@ -132,6 +147,11 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
             enableComboPrint: updatedSettings.enableComboPrint,
             enableRequestService: updatedSettings.enableRequestService,
             enableCookingInstructions: updatedSettings.enableCookingInstructions,
+            enableDirectPaymentToProcess: updatedSettings.enableDirectPaymentToProcess,
+            enableSkipSummaryScreen: updatedSettings.enableSkipSummaryScreen,
+            enableReceiptPrint: updatedSettings.enableReceiptPrint,
+            enableVoiceSuccess: updatedSettings.enableVoiceSuccess,
+            enableNotificationSound: updatedSettings.enableNotificationSound,
           };
 
           const res = await fetch(`${API_URL}/api/settings/update`, {

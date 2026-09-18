@@ -153,6 +153,18 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Relay terminal payment status to other tablets
+  socket.on("terminal_payment_sync", (data) => {
+    console.log(`🔌 [Server] Terminal payment sync:`, data);
+    socket.broadcast.emit("terminal_payment_sync", data);
+  });
+
+  // Relay terminal split rows status to other tablets
+  socket.on("terminal_split_rows_sync", (data) => {
+    console.log(`🔌 [Server] Terminal split rows sync:`, data);
+    socket.broadcast.emit("terminal_split_rows_sync", data);
+  });
+
   socket.on("disconnect", () => {
     console.log("🔌 Client disconnected:", socket.id);
   });
@@ -185,6 +197,10 @@ async function pollTables() {
           entry_status AS entryStatus,
           CustomerName as customerName,
           Pax as pax,
+          TableType,
+          Seats,
+          XSize,
+          YSize,
           CASE 
             WHEN Status IN (1, 2, 3) AND StartTime IS NOT NULL AND StartTime > '2000-01-01' AND DATEDIFF(MINUTE, StartTime, GETDATE()) >= 60 THEN 1 
             ELSE 0 
@@ -275,7 +291,7 @@ app.use(
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
-  maxAge: '1d',
+  maxAge: '1d', 
   immutable: true
 }));
 app.use(express.static(path.join(__dirname, "dist")));
@@ -302,7 +318,10 @@ app.use("/api/export", exportRoutes);
 app.use("/api/credit-customers", creditCustomerRoutes);
 app.use("/api/settlement", settlementRoutes);
 app.use("/api/settlement", settlementLegacyRoutes);
-app.use('/api/yeahpay', yeahpayRoutes);
+app.use('/api/yeahpay', (req, res, next) => {
+  req.io = io;
+  next();
+}, yeahpayRoutes);
 app.use("/api/loyalty", loyaltyRoutes);
 app.use("/api/loyalty/configs", loyaltyConfigRoutes);
 app.use("/api/combo", comboRoutes);

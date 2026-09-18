@@ -391,9 +391,19 @@ class SunmiPrinterService {
       const dateStr = formatToSingaporeDate(saleDate, { day: '2-digit', month: '2-digit', year: 'numeric' });
       const timeStr = formatToSingaporeTime(saleDate);
 
-      await SunmiModule.printText(formatter.left(`INVOICE NO: ${saleData.invoiceNumber || saleData.id}`));
       if (saleData.tableNo) {
-        await SunmiModule.printText(formatter.left(`TABLE NO: ${saleData.tableNo}`));
+        const cleanTableNo = /^\d+$/.test(String(saleData.tableNo).trim()) 
+          ? String(saleData.tableNo).trim().padStart(2, '0') 
+          : saleData.tableNo;
+        try {
+          if (SunmiModule.setBold) await SunmiModule.setBold(true);
+        } catch (_) {}
+        await SunmiModule.printText(formatter.twoCols(`INVOICE NO: ${saleData.invoiceNumber || saleData.id}`, `TABLE: ${cleanTableNo}`));
+        try {
+          if (SunmiModule.setBold) await SunmiModule.setBold(false);
+        } catch (_) {}
+      } else {
+        await SunmiModule.printText(formatter.left(`INVOICE NO: ${saleData.invoiceNumber || saleData.id}`));
       }
       await SunmiModule.printText(formatter.left(`DATE: ${dateStr} ${timeStr}`));
       if (saleData.waiterName && saleData.waiterName !== "Staff") {
@@ -479,7 +489,34 @@ class SunmiPrinterService {
         totalItemDiscount += itemDiscount;
       });
 
-      const orderDiscount = parseFloat(String(saleData.discountAmount || 0)) || 0;
+      const finalDiscountInfo =
+        saleData.discount ||
+        (saleData.discount
+          ? {
+              applied: true,
+              type: saleData.discount.type || "percentage",
+              value: saleData.discount.value || 0,
+              amount: saleData.discount.amount || saleData.discountAmount || 0,
+            }
+          : saleData.discountAmount && saleData.discountAmount > 0
+            ? {
+                applied: true,
+                type: saleData.discountType || "percentage",
+                value: saleData.discountValue || 0,
+                amount: saleData.discountAmount,
+              }
+            : null);
+
+      let orderDiscount = finalDiscountInfo?.amount || parseFloat(String(saleData.discountAmount || 0)) || 0;
+      if (orderDiscount === 0 && finalDiscountInfo && finalDiscountInfo.applied !== false && finalDiscountInfo.value > 0) {
+        const subtotalPostItemDisc = Math.max(0, grossTotal - totalItemDiscount);
+        if (finalDiscountInfo.type === "percentage") {
+          orderDiscount = (subtotalPostItemDisc * finalDiscountInfo.value) / 100;
+        } else {
+          orderDiscount = Math.min(finalDiscountInfo.value, subtotalPostItemDisc);
+        }
+      }
+
       const hasAnyDiscount = totalItemDiscount > 0 || orderDiscount > 0;
       let currentSubtotal = grossTotal;
 
@@ -491,7 +528,9 @@ class SunmiPrinterService {
       }
 
       if (orderDiscount > 0) {
-        const discLabel = saleData.discountType === "percentage" ? `Discount (${saleData.discountValue}%):` : "Discount:";
+        const discType = finalDiscountInfo?.type || saleData.discountType || "percentage";
+        const discVal = finalDiscountInfo?.value ?? saleData.discountValue;
+        const discLabel = discType === "percentage" ? `Discount (${discVal}%):` : "Discount:";
         await SunmiModule.printText(formatter.twoCols(discLabel, `-${symbol}${orderDiscount.toFixed(2)}`));
         currentSubtotal -= orderDiscount;
       }
@@ -550,22 +589,38 @@ class SunmiPrinterService {
       const companySettingsStore = useCompanySettingsStore.getState().settings;
       const takeawayRateFromSettings = companySettingsStore?.takeawayCharges || 0;
       let takeawayCharge = saleData.takeawayCharge !== undefined ? parseFloat(String(saleData.takeawayCharge)) : 0;
-      let takeawayQty = (saleData.items || []).reduce((sum: number, item: any) => {
+      
+      let firstRate: number | null = null;
+      let mixed = false;
+      let calculatedTWCharge = 0;
+      let takeawayQty = 0;
+
+      (saleData.items || []).forEach((item: any) => {
         const isTW = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway;
         const isVoided = item.status === "VOIDED" || item.StatusCode === 0;
         if (isTW && !isVoided) {
-          return sum + (item.qty || item.quantity || 1);
+          const qtyNum = parseInt(String(item.qty || item.quantity || 1)) || 1;
+          takeawayQty += qtyNum;
+
+          const dishSpecificTW = Number(item.takeawayCharge ?? item.TakeawayCharge ?? 0);
+          const effectiveTWRate = dishSpecificTW > 0 ? dishSpecificTW : takeawayRateFromSettings;
+          calculatedTWCharge += qtyNum * effectiveTWRate;
+
+          if (firstRate === null) {
+            firstRate = effectiveTWRate;
+          } else if (firstRate !== effectiveTWRate) {
+            mixed = true;
+          }
         }
-        return sum;
-      }, 0);
+      });
 
       if (takeawayQty === 0 && takeawayCharge > 0) {
         const effectiveRate = takeawayRateFromSettings > 0 ? takeawayRateFromSettings : takeawayCharge;
         takeawayQty = Math.round(takeawayCharge / effectiveRate) || 1;
       } else if (takeawayQty > 0 && takeawayCharge === 0) {
-        takeawayCharge = takeawayQty * takeawayRateFromSettings;
+        takeawayCharge = calculatedTWCharge > 0 ? calculatedTWCharge : takeawayQty * takeawayRateFromSettings;
       }
-      const takeawayRate = takeawayQty > 0 ? (takeawayCharge / takeawayQty) : takeawayRateFromSettings;
+      const takeawayRate = takeawayQty > 0 ? (firstRate !== null && !mixed ? firstRate : takeawayCharge / takeawayQty) : takeawayRateFromSettings;
       
       const taxableAmount = currentSubtotal + serviceChargeAmount + takeawayCharge;
       const gstAmountRaw = gstRate > 0 ? taxableAmount * (gstRate / 100) : 0;
@@ -588,7 +643,7 @@ class SunmiPrinterService {
       }
 
       if (takeawayCharge > 0) {
-        await SunmiModule.printText(formatter.twoCols(`Takeaway Charges (${symbol}${takeawayRate.toFixed(2)}*${takeawayQty}):`, `${symbol}${takeawayCharge.toFixed(2)}`));
+        await SunmiModule.printText(formatter.twoCols("Takeaway Charges:", `${symbol}${takeawayCharge.toFixed(2)}`));
       }
 
       if (gstRate > 0) {
@@ -641,7 +696,7 @@ class SunmiPrinterService {
         await SunmiModule.printText(formatter.center("THANK YOU! COME AGAIN!"));
       }
       await SunmiModule.lineWrap(1);
-      await SunmiModule.printText(formatter.center("SMART-POS BY UNIPROSG"));
+      await SunmiModule.printText(formatter.center("SMART-CAFE BY UNIPROSG"));
 
       if (companySettings.gstPercentage > 0) {
         await SunmiModule.printText(formatter.center(`* Prices include ${companySettings.gstPercentage}% GST`));
@@ -653,6 +708,84 @@ class SunmiPrinterService {
       return true;
     } catch (error) {
       console.log("❌ Print error:", error);
+      return false;
+    }
+  }
+
+  // ✅ QR Fix: Print a scannable QR code using Sunmi built-in printer
+  static async printQR(qrUrl: string, tableLabel: string, sectionName: string): Promise<boolean> {
+    try {
+      if (!SunmiModule) {
+        const initialized = await this.init();
+        if (!initialized) return false;
+      }
+
+      await SunmiPrinterManager.init();
+      const formatter = SunmiPrinterManager.getFormatter();
+
+      await SunmiModule.printText(formatter.doubleDivider("="));
+      await SunmiModule.lineWrap(1);
+
+      try {
+        if (SunmiModule.setFontSize) await SunmiModule.setFontSize(28);
+        if (SunmiModule.setBold) await SunmiModule.setBold(true);
+      } catch (_) {}
+
+      await SunmiModule.printText(formatter.center("TABLE QR CODE"));
+      await SunmiModule.lineWrap(1);
+
+      try {
+        if (SunmiModule.setFontSize) await SunmiModule.setFontSize(24);
+      } catch (_) {}
+
+      if (tableLabel) await SunmiModule.printText(formatter.center(`Table: ${tableLabel}`));
+      if (sectionName) await SunmiModule.printText(formatter.center(sectionName));
+      await SunmiModule.lineWrap(1);
+
+      try {
+        if (SunmiModule.setBold) await SunmiModule.setBold(false);
+      } catch (_) {}
+
+      // Try native printBarCode2 (QR code command) first if available
+      try {
+        if (SunmiModule.printBarCode2) {
+          // Sunmi SDK: printBarCode2(data, symbology, height, width, textPosition)
+          // symbology 8 = QR Code
+          await SunmiModule.printBarCode2(qrUrl, 8, 350, 350, 0);
+          await SunmiModule.lineWrap(2);
+          console.log("✅ QR printed via Sunmi printBarCode2");
+        } else if (SunmiModule.printQRCode) {
+          await SunmiModule.printQRCode(qrUrl, 12, 0);
+          await SunmiModule.lineWrap(2);
+          console.log("✅ QR printed via Sunmi printQRCode");
+        } else {
+          throw new Error("No native QR method available");
+        }
+      } catch (nativeQrErr) {
+        console.warn("Native QR method failed, trying image fallback:", nativeQrErr);
+        // Fallback: download QR as bitmap from API and print as image
+        try {
+          const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${encodeURIComponent(qrUrl)}`;
+          const base64Qr = await this.urlToBase64(qrApiUrl);
+          await SunmiModule.printImageBase64(base64Qr);
+          await SunmiModule.lineWrap(2);
+          console.log("✅ QR printed via image bitmap fallback");
+        } catch (imgErr) {
+          console.warn("QR image fallback also failed:", imgErr);
+          // Last resort: just print the URL as text for scanning
+          await SunmiModule.printText(formatter.center("SCAN URL:"));
+          await SunmiModule.printText(formatter.left(qrUrl));
+          await SunmiModule.lineWrap(1);
+        }
+      }
+
+      await SunmiModule.printText(formatter.center("Scan to Order"));
+      await SunmiModule.printText(formatter.doubleDivider("="));
+      await SunmiModule.lineWrap(3);
+      await SunmiModule.cutPaper();
+      return true;
+    } catch (error) {
+      console.log("❌ Sunmi QR print error:", error);
       return false;
     }
   }
@@ -669,13 +802,13 @@ class SunmiPrinterService {
 
       const is80mm = SunmiPrinterManager.getPaperSize() === "80mm";
       const fontSizes = {
-        title: is80mm ? 36 : 44,
-        timestamp: is80mm ? 26 : 30,
-        table: is80mm ? 48 : 60,
-        item: is80mm ? 36 : 44,
-        modifier: is80mm ? 34 : 42,
-        note: is80mm ? 28 : 34,
-        reset: is80mm ? 24 : 28,
+        title: is80mm ? 26 : 30,
+        timestamp: is80mm ? 20 : 24,
+        table: is80mm ? 28 : 34,
+        item: is80mm ? 24 : 28,
+        modifier: is80mm ? 22 : 26,
+        note: is80mm ? 20 : 24,
+        reset: is80mm ? 20 : 24,
       };
 
       const title = type === "KDS_PRINT" ? "KDS PRINT" : type === "REPRINT" ? "REPRINT" : type === "ADDITIONAL" ? "ADDITIONAL" : "NEW ORDER";
@@ -707,7 +840,7 @@ class SunmiPrinterService {
       await SunmiModule.printText(formatter.left(timestamp));
       await SunmiModule.lineWrap(1);
 
-      // ============ TABLE INFO (EXTREMELY LARGE) ============
+      // ============ TABLE INFO ============
       await SunmiModule.printText(formatter.doubleDivider("="));
       await setSize(fontSizes.table);
       await SunmiModule.printText(formatter.left(`TABLE: ${tableNo}`));
@@ -741,7 +874,6 @@ class SunmiPrinterService {
 
         const isTw = !!(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
         if (isTw) {
-          // Increase size to item size and enable bold
           await setSize(fontSizes.item);
           try {
             if (SunmiModule.setBold) await SunmiModule.setBold(true);
@@ -778,7 +910,7 @@ class SunmiPrinterService {
       }
 
       await setSize(fontSizes.reset);
-      await SunmiModule.lineWrap(3);
+      await SunmiModule.lineWrap(1);
       await SunmiModule.cutPaper();
       return true;
     } catch (err) {

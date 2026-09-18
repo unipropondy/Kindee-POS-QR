@@ -42,6 +42,7 @@ export type CartItem = {
   discountType?: string;    // 'percentage' | 'fixed' | null
   basePrice?: number;
   isTakeaway?: boolean;
+  takeawayCharge?: number;
   isVoided?: boolean;
   categoryName?: string; 
   status?: "NEW" | "SENT" | "VOIDED" | "READY" | "SERVED" | "HOLD";
@@ -56,6 +57,7 @@ export type CartItem = {
   isCombo?: boolean;
   comboSelections?: any[];
   IsDiscountAllowed?: number | boolean;
+  isFoc?: boolean;
 };
 
 export type DiscountInfo = {
@@ -277,6 +279,7 @@ const normalizeCartItem = (item: any, fallback: Partial<CartItem> = {}): CartIte
     basePrice: finalBasePrice,
     note,
     isTakeaway,
+    takeawayCharge: Number(item.takeawayCharge ?? item.TakeawayCharge ?? fallback.takeawayCharge ?? 0),
     discount,
     modifiers,
     splitMembers,
@@ -307,6 +310,7 @@ const normalizeCartItem = (item: any, fallback: Partial<CartItem> = {}): CartIte
     IsDiscountAllowed: item.IsDiscountAllowed !== undefined ? item.IsDiscountAllowed : (fallback.IsDiscountAllowed !== undefined ? fallback.IsDiscountAllowed : 1),
     discountAmount: Number(item.discount ?? item.discountAmount ?? item.DiscountAmount ?? fallback.discountAmount ?? discount),
     discountType: item.discountType || item.DiscountType || fallback.discountType || "percentage",
+    isFoc: getNormalizedBoolean(item.isFoc, item.IsFoc, fallback.isFoc),
   };
 };
 
@@ -320,10 +324,13 @@ const canMergeCartItems = (left: CartItem, right: CartItem) => {
     if (left.isCombo !== right.isCombo) return false;
     if (JSON.stringify(left.comboSelections) !== JSON.stringify(right.comboSelections)) return false;
   }
+  if ((left.discountAmount || 0) !== (right.discountAmount || 0)) return false;
+  if ((left.discountType || "") !== (right.discountType || "")) return false;
   return (
     (left.status || "NEW") === "NEW" &&
     (right.status || "NEW") === "NEW" &&
     !!left.isTakeaway === !!right.isTakeaway &&
+    !!left.isFoc === !!right.isFoc &&
     (left.note || "") === (right.note || "") &&
     (left.spicy || "") === (right.spicy || "") &&
     (left.salt || "") === (right.salt || "") &&
@@ -403,6 +410,7 @@ type CartState = {
       discountType?: string;
       isVoided?: boolean;
       isTakeaway?: boolean;
+      isFoc?: boolean;
     },
   ) => void;
   applyBulkItemDiscount: (value: number, type: "percentage" | "fixed") => void;
@@ -552,6 +560,8 @@ export const useCartStore = create<CartState>()(
                 p.songName !== normalizedIncoming.songName ||
                 p.status !== "NEW" || 
                 p.isTakeaway !== normalizedIncoming.isTakeaway || 
+                (p.discountAmount || 0) !== (normalizedIncoming.discountAmount || 0) ||
+                (p.discountType || "") !== (normalizedIncoming.discountType || "") ||
                 (p.note || "") !== (normalizedIncoming.note || "") ||
                 (p.spicy || "") !== (normalizedIncoming.spicy || "") ||
                 (p.salt || "") !== (normalizedIncoming.salt || "") ||
@@ -1541,10 +1551,6 @@ export const useCartStore = create<CartState>()(
                   const dbStatus = dbItem.status || "NEW";
                   const localStatus = localItem.status || "NEW";
                   if (dbStatus !== localStatus) {
-                    // If local is NEW and server has it as SENT, they are the same item just sent.
-                    if (localStatus === "NEW" && dbStatus === "SENT") {
-                      return true;
-                    }
                     return false;
                   }
                   
@@ -1687,15 +1693,16 @@ export const useCartStore = create<CartState>()(
     }),
     {
       name: "cart-storage",
-      storage: createJSONStorage(() => 
-        Platform.OS === 'web' ? window.sessionStorage : AsyncStorage
+      storage: createJSONStorage(() =>
+        Platform.OS === 'web' ? window.localStorage : AsyncStorage
       ),
-      // 🚀 PERF: Only persist session-critical fields. Cart items are always re-fetched from DB
-      // on table open. Persisting carts/discounts/shields caused heavy AsyncStorage writes on
-      // every mutation (4+ writes per cart item add). Now: ~0 writes during normal operation.
+      // Persist session-critical fields + cart items/discounts so checkout
+      // survives a page refresh on web
       partialize: (state) => ({
         tableOrderIds: state.tableOrderIds,
         currentContextId: state.currentContextId,
+        carts: state.carts,
+        discounts: state.discounts,
       }),
       merge: (persistedState: any, currentState) => {
         const merged = { ...currentState, ...persistedState };
@@ -1796,6 +1803,7 @@ export const updateCartItemFullGlobal = (
     discount?: number;
     isTakeaway?: boolean;
     isVoided?: boolean;
+    isFoc?: boolean;
   },
 ) => useCartStore.getState().updateCartItemFull(lineItemId, updates);
 

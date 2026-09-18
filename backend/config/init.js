@@ -301,6 +301,7 @@ async function initDB(pool) {
 
     await runQuery("SettlementHeader - DiscountAmount", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'DiscountAmount') ALTER TABLE [dbo].[SettlementHeader] ADD DiscountAmount DECIMAL(18, 2) DEFAULT 0");
     await runQuery("SettlementHeader - DiscountType", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'DiscountType') ALTER TABLE [dbo].[SettlementHeader] ADD DiscountType NVARCHAR(50)");
+    await runQuery("SettlementHeader - entry_status", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'entry_status') ALTER TABLE [dbo].[SettlementHeader] ADD entry_status VARCHAR(50) NULL");
 
     // 10. Performance Indexes
     await runQuery("Index - SettlementHeader Date", "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_SettlementHeader_Date') CREATE INDEX IX_SettlementHeader_Date ON [dbo].[SettlementHeader] (LastSettlementDate)");
@@ -349,12 +350,15 @@ async function initDB(pool) {
     await runQuery("CompanySettings - LastBridgeHeartbeat", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CompanySettings]') AND name = 'LastBridgeHeartbeat') ALTER TABLE [dbo].[CompanySettings] ADD LastBridgeHeartbeat DATETIME");
     await runQuery("AppSettings - EnableCheckoutFlow", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableCheckoutFlow') ALTER TABLE [dbo].[AppSettings] ADD EnableCheckoutFlow BIT NOT NULL DEFAULT 1");
     await runQuery("AppSettings - EnableDirectProcessToPay", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableDirectProcessToPay') ALTER TABLE [dbo].[AppSettings] ADD EnableDirectProcessToPay BIT NOT NULL DEFAULT 0");
+    await runQuery("AppSettings - EnableDirectPaymentToProcess", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableDirectPaymentToProcess') ALTER TABLE [dbo].[AppSettings] ADD EnableDirectPaymentToProcess BIT NOT NULL DEFAULT 0");
+    await runQuery("AppSettings - EnableSkipSummaryScreen", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableSkipSummaryScreen') ALTER TABLE [dbo].[AppSettings] ADD EnableSkipSummaryScreen BIT NOT NULL DEFAULT 0");
     await runQuery("AppSettings - CustomerSideDisplay", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'CustomerSideDisplay') ALTER TABLE [dbo].[AppSettings] ADD CustomerSideDisplay BIT NOT NULL DEFAULT 1");
     await runQuery("AppSettings - EnableGuestDetailsPopup", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableGuestDetailsPopup') ALTER TABLE [dbo].[AppSettings] ADD EnableGuestDetailsPopup BIT NOT NULL DEFAULT 1");
     await runQuery("AppSettings - EnableCashDrawer", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableCashDrawer') ALTER TABLE [dbo].[AppSettings] ADD EnableCashDrawer BIT NOT NULL DEFAULT 1");
     await runQuery("AppSettings - EnableOnlinePayment", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableOnlinePayment') ALTER TABLE [dbo].[AppSettings] ADD EnableOnlinePayment BIT NOT NULL DEFAULT 1");
     await runQuery("AppSettings - EnableComboPrint", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableComboPrint') ALTER TABLE [dbo].[AppSettings] ADD EnableComboPrint BIT NOT NULL DEFAULT 0");
     await runQuery("AppSettings - EnableCookingInstructions", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableCookingInstructions') ALTER TABLE [dbo].[AppSettings] ADD EnableCookingInstructions BIT NOT NULL DEFAULT 1");
+    await runQuery("AppSettings - EnableReceiptPrint", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableReceiptPrint') ALTER TABLE [dbo].[AppSettings] ADD EnableReceiptPrint BIT NOT NULL DEFAULT 1");
     await runQuery("RestaurantOrderCur - TakeawayCharge", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[RestaurantOrderCur]') AND name = 'TakeawayCharge') ALTER TABLE [dbo].[RestaurantOrderCur] ADD TakeawayCharge DECIMAL(18, 2) DEFAULT 0");
     await runQuery("RestaurantOrder - TakeawayCharge", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[RestaurantOrder]') AND name = 'TakeawayCharge') ALTER TABLE [dbo].[RestaurantOrder] ADD TakeawayCharge DECIMAL(18, 2) DEFAULT 0");
     await runQuery("SettlementHeader - TakeawayCharge", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'TakeawayCharge') ALTER TABLE [dbo].[SettlementHeader] ADD TakeawayCharge DECIMAL(18, 2) DEFAULT 0");
@@ -499,6 +503,14 @@ async function initDB(pool) {
       END
     `);
 
+    // Upgrade: Add start_date column for business day alignment
+    await runQuery("Upgrade CustomerCreditTransactions - Add start_date", `
+      IF COL_LENGTH('dbo.CustomerCreditTransactions', 'start_date') IS NULL
+      BEGIN
+          ALTER TABLE [dbo].[CustomerCreditTransactions] ADD [start_date] DATE NULL
+      END
+    `);
+
     await runQuery("Index - CustomerCreditTransactions MemberId", `
       IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_CreditTrans_MemberId' AND object_id = OBJECT_ID('CustomerCreditTransactions'))
       BEGIN
@@ -603,6 +615,9 @@ async function initDB(pool) {
       END
     `);
 
+    await runQuery("OpeningCashDenomination - ScreenType", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[OpeningCashDenomination]') AND name = 'ScreenType') ALTER TABLE [dbo].[OpeningCashDenomination] ADD ScreenType NVARCHAR(50) NULL");
+    await runQuery("OpeningCashDenomination - start_date", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[OpeningCashDenomination]') AND name = 'start_date') ALTER TABLE [dbo].[OpeningCashDenomination] ADD start_date DATE NULL");
+
     // 18. Create CashOutEntry table
     await runQuery("Create CashOutEntry table", `
       IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[CashOutEntry]') AND type in (N'U'))
@@ -618,10 +633,18 @@ async function initDB(pool) {
               [ReferenceNo] [nvarchar](100) NULL,
               [TerminalCode] [nvarchar](50) NULL,
               [CreatedBy] [nvarchar](100) NULL,
-              [CreatedOn] [datetime] NULL
+              [CreatedOn] [datetime] NULL,
+              [start_date] [date] NULL,
+              [AttachmentUrl] [nvarchar](500) NULL
           )
       END
     `);
+
+    // Ensure start_date exists in CashOutEntry
+    await runQuery("CashOutEntry - start_date", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CashOutEntry]') AND name = 'start_date') ALTER TABLE [dbo].[CashOutEntry] ADD [start_date] DATE NULL");
+
+    // Ensure AttachmentUrl exists in CashOutEntry
+    await runQuery("CashOutEntry - AttachmentUrl", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CashOutEntry]') AND name = 'AttachmentUrl') ALTER TABLE [dbo].[CashOutEntry] ADD [AttachmentUrl] NVARCHAR(500) NULL");
 
     // 18.1 Create CashInEntry table (for manual Cash-In tracking)
     await runQuery("Create CashInEntry table", `
@@ -638,7 +661,30 @@ async function initDB(pool) {
               [ReferenceNo] [nvarchar](100) NULL,
               [TerminalCode] [nvarchar](50) NULL,
               [CreatedBy] [nvarchar](100) NULL,
-              [CreatedOn] [datetime] NULL
+              [CreatedOn] [datetime] NULL,
+              [start_date] [date] NULL,
+              [AttachmentUrl] [nvarchar](500) NULL
+          )
+      END
+    `);
+
+    // Ensure start_date exists in CashInEntry
+    await runQuery("CashInEntry - start_date", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CashInEntry]') AND name = 'start_date') ALTER TABLE [dbo].[CashInEntry] ADD [start_date] DATE NULL");
+
+    // Ensure AttachmentUrl exists in CashInEntry
+    await runQuery("CashInEntry - AttachmentUrl", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CashInEntry]') AND name = 'AttachmentUrl') ALTER TABLE [dbo].[CashInEntry] ADD [AttachmentUrl] NVARCHAR(500) NULL");
+
+    // 18.2 Create ArtistCashBox table
+    await runQuery("Create ArtistCashBox table", `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[ArtistCashBox]') AND type in (N'U'))
+      BEGIN
+          CREATE TABLE [dbo].[ArtistCashBox](
+              [CashBoxId] [uniqueidentifier] NOT NULL PRIMARY KEY DEFAULT NEWID(),
+              [ArtistName] [varchar](255) NULL,
+              [Amount] [decimal](18, 2) NULL,
+              [CreatedDate] [datetime] DEFAULT GETDATE(),
+              [SettlementID] [uniqueidentifier] NULL,
+              [start_date] [date] NULL
           )
       END
     `);
@@ -658,6 +704,35 @@ async function initDB(pool) {
               [CreatedDate] [datetime] DEFAULT GETDATE(),
               [UpdateBy] [varchar](30) NULL,
               [UpdateDate] [datetime] NULL
+          )
+      END
+    `);
+
+    // 19.2 Create BusinessDayLog table for Day Start/End history tracking
+    await runQuery("Create BusinessDayLog table", `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[BusinessDayLog]') AND type in (N'U'))
+      BEGIN
+          CREATE TABLE [dbo].[BusinessDayLog](
+              [BusinessDate] [date] NOT NULL PRIMARY KEY,
+              [StartedAt] [datetime] NULL,
+              [StartedBy] [nvarchar](50) NULL,
+              [EndedAt] [datetime] NULL,
+              [EndedBy] [nvarchar](50) NULL
+          )
+      END
+    `);
+
+    // 19.3 Create BusinessDayAuditLog table for Day Start/End event audit log
+    await runQuery("Create BusinessDayAuditLog table", `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[BusinessDayAuditLog]') AND type in (N'U'))
+      BEGIN
+          CREATE TABLE [dbo].[BusinessDayAuditLog](
+              [AuditId] [int] IDENTITY(1,1) NOT NULL PRIMARY KEY,
+              [BusinessDate] [date] NOT NULL,
+              [EventType] [nvarchar](50) NOT NULL,
+              [EventTime] [datetime] NOT NULL DEFAULT GETDATE(),
+              [ActionBy] [nvarchar](50) NULL,
+              [Remarks] [nvarchar](255) NULL
           )
       END
     `);
