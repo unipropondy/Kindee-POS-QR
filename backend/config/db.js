@@ -1,7 +1,23 @@
 const path = require("path");
 // Adjust path to root of backend folder where .env is located
 require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
-const sql = require("mssql"); 
+const sql = require("mssql");
+
+// ---------------------------------------------------------------------------
+// STARTUP VALIDATION: Ensure all required DB environment variables are set.
+// When deployed to Railway/Cloudflare, the .env file is NOT deployed —
+// these variables MUST be configured in the hosting platform's environment
+// settings. Missing variables will cause a fatal startup error here rather
+// than a silent connection to the wrong database.
+// ---------------------------------------------------------------------------
+const REQUIRED_DB_VARS = ["DB_SERVER", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"];
+const missingVars = REQUIRED_DB_VARS.filter((v) => !process.env[v]);
+if (missingVars.length > 0) {
+  console.error("❌ FATAL: Missing required database environment variables:", missingVars.join(", "));
+  console.error("   Set these variables in your Railway / Cloudflare environment settings.");
+  console.error("   See backend/.env.example for the full list of required variables.");
+  process.exit(1);
+}
 
 const dbConfig = {
   user: process.env.DB_USER,
@@ -13,7 +29,7 @@ const dbConfig = {
     encrypt: false,
     trustServerCertificate: true,
     enableArithAbort: true,
-    connectTimeout: 30000, 
+    connectTimeout: 30000,
     requestTimeout: 30000,
     appName: "POS_System",
     keepAlive: true // Enable TCP keepAlive

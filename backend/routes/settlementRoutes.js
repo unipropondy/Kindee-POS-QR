@@ -220,21 +220,66 @@ router.get("/day-history", async (req, res) => {
     const pool = getPool();
     const request = pool.request();
 
-    let query = `
-      SELECT AuditId, BusinessDate, EventType, EventTime, ActionBy, Remarks
-      FROM BusinessDayAuditLog
-    `;
-
+    // Build optional WHERE clause parameters
+    let whereClause = "";
     if (date) {
       request.input("date", sql.Date, date);
-      query += ` WHERE BusinessDate = @date`;
+      whereClause = "WHERE BusinessDate = @date";
     } else if (fromDate && toDate) {
       request.input("fromDate", sql.Date, fromDate);
       request.input("toDate", sql.Date, toDate);
-      query += ` WHERE BusinessDate BETWEEN @fromDate AND @toDate`;
+      whereClause = "WHERE BusinessDate BETWEEN @fromDate AND @toDate";
     }
 
-    query += ` ORDER BY EventTime DESC`;
+    // Query BusinessDayAuditLog directly (append-only audit trail).
+    // UNION with BusinessDayLog to backfill any Day Start / Day End events
+    // that were recorded in BusinessDayLog before the BusinessDayAuditLog
+    // table was created (i.e. historical records not yet in the audit table).
+    const query = `
+      SELECT AuditId, BusinessDate, EventType, EventTime, ActionBy, Remarks
+      FROM BusinessDayAuditLog
+      ${whereClause}
+
+      UNION ALL
+
+      -- Backfill: Day Start events from BusinessDayLog not already in audit log
+      SELECT
+        NULL          AS AuditId,
+        bdl.BusinessDate,
+        'DAY_START'   AS EventType,
+        bdl.StartedAt AS EventTime,
+        bdl.StartedBy AS ActionBy,
+        NULL          AS Remarks
+      FROM BusinessDayLog bdl
+      WHERE bdl.StartedAt IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM BusinessDayAuditLog a
+          WHERE a.BusinessDate = bdl.BusinessDate AND a.EventType = 'DAY_START'
+        )
+        ${date ? "AND bdl.BusinessDate = @date" : ""}
+        ${fromDate && toDate ? "AND bdl.BusinessDate BETWEEN @fromDate AND @toDate" : ""}
+
+      UNION ALL
+
+      -- Backfill: Day End events from BusinessDayLog not already in audit log
+      SELECT
+        NULL          AS AuditId,
+        bdl.BusinessDate,
+        'DAY_END'     AS EventType,
+        bdl.EndedAt   AS EventTime,
+        bdl.EndedBy   AS ActionBy,
+        NULL          AS Remarks
+      FROM BusinessDayLog bdl
+      WHERE bdl.EndedAt IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM BusinessDayAuditLog a
+          WHERE a.BusinessDate = bdl.BusinessDate AND a.EventType = 'DAY_END'
+        )
+        ${date ? "AND bdl.BusinessDate = @date" : ""}
+        ${fromDate && toDate ? "AND bdl.BusinessDate BETWEEN @fromDate AND @toDate" : ""}
+
+      ORDER BY EventTime DESC
+    `;
 
     const result = await request.query(query);
     res.json({ success: true, data: result.recordset || [] });
@@ -243,6 +288,7 @@ router.get("/day-history", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 // ============================================

@@ -2911,6 +2911,7 @@ router.get("/payment-methods", async (req, res) => {
           ISNULL(IsEntertainment, 0) as isEntertainment,
           ISNULL(IsVoucher, 0)       as isVoucher
         FROM [dbo].[Paymode] 
+        WHERE Active = 1
         ORDER BY Position ASC
       `);
       res.json(result.recordset || []);
@@ -3475,7 +3476,7 @@ router.post("/settlement/:id/change-payment", async (req, res) => {
     }
 
     // Resolve paymodes from Paymode table
-    const pmResult = await pool.request().query(`SELECT Position, PayMode, Description FROM [dbo].[Paymode]`);
+    const pmResult = await pool.request().query(`SELECT Position, PayMode, Description FROM [dbo].[Paymode] WHERE Active = 1`);
     const activePaymodes = pmResult.recordset;
 
     const validatedSplits = [];
