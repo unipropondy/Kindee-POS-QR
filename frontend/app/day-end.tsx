@@ -39,6 +39,42 @@ function parseLocalDate(dateStr: string): Date {
 }
 
 
+const getAuthToken = async (): Promise<string | null> => {
+  let token = useAuthStore.getState().token;
+  if (!token && typeof window !== "undefined") {
+    try {
+      token = localStorage.getItem("userToken") || sessionStorage.getItem("userToken");
+      if (!token) {
+        const storedSession = sessionStorage.getItem("auth-storage");
+        const storedLocal = localStorage.getItem("auth-storage");
+        if (storedSession) {
+          token = JSON.parse(storedSession)?.state?.token;
+        } else if (storedLocal) {
+          token = JSON.parse(storedLocal)?.state?.token;
+        }
+      }
+    } catch (e) {}
+  }
+  if (!token) {
+    try {
+      token = await AsyncStorage.getItem("userToken");
+    } catch (e) {}
+  }
+  return token;
+};
+
+const authFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const token = await getAuthToken();
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type") && (!init?.method || init.method.toUpperCase() !== "GET")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return fetch(input, { ...init, headers });
+};
+
 export default function DayEndScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
@@ -68,7 +104,7 @@ export default function DayEndScreen() {
   const fetchDaySummary = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/sales/day-end-summary?startDate=${dateRange.start}&endDate=${dateRange.end}`);
+      const res = await authFetch(`${API_URL}/api/sales/day-end-summary?startDate=${dateRange.start}&endDate=${dateRange.end}`);
       const json = await res.json();
       if (json.success) {
         setData(json);
@@ -157,7 +193,7 @@ export default function DayEndScreen() {
   const executeDayEnd = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/settlement/day-end`, {
+      const res = await authFetch(`${API_URL}/api/settlement/day-end`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
