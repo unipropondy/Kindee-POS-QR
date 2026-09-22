@@ -8,8 +8,8 @@ node_modules/
 # =========================
 .expo/
 .expo-shared/
-dist/
 frontend/dist/
+!backend/dist/
 web-build/
 expo-env.d.ts
 
