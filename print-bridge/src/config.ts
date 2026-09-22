@@ -106,7 +106,7 @@ const defaultConfig: BridgeConfig = {
     },
     {
       name: 'QR POS',
-      url: 'https://kindee-2026-production.up.railway.app',
+      url: 'https://online-qr-production.up.railway.app',
       enabled: true
     }
   ]
