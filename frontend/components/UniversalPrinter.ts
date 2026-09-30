@@ -2200,13 +2200,14 @@ class UniversalPrinter {
         });
 
         for (const [kCode, groupItems] of Object.entries(kitchenGroups)) {
-          const printerIp = groupItems[0].PrinterIP || groupItems[0].printerIp;
-
-          // If no printer IP is assigned/enabled for this kitchen, skip printing KOT
-          if (!printerIp || printerIp.trim() === '') {
-            console.log(`🖨️ [UniversalPrinter] ⏩ Skipping KOT print for kitchen group ${kCode} (${groupItems[0].KitchenTypeName}) — No printer IP configured/enabled`);
+          const kNameLower = (groupItems[0].KitchenTypeName || '').toLowerCase();
+          // Skip KOT print for Beverage/Dessert kitchen
+          if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert')) {
+            console.log(`🖨️ [UniversalPrinter] 🥤 Skipping KOT print for Beverage/Dessert kitchen group ${kCode} (${groupItems[0].KitchenTypeName})`);
             continue;
           }
+
+          const printerIp = groupItems[0].PrinterIP || groupItems[0].printerIp;
           const kotData = {
             orderId,
             orderNo: orderId,
