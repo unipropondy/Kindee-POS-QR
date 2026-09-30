@@ -17,6 +17,7 @@ import {
   Image,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -1996,9 +1997,11 @@ const fetchDayHistory = async () => {
             <Text style={styles.headerTitle}>Settlement</Text>
 
             {!isTablet && (
-              <View style={{ marginLeft: 'auto', flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <View style={{ marginLeft: 'auto', flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+
+
                 <TouchableOpacity
-                  style={[styles.confirmBtn, { paddingVertical: 6, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 }]}
+                  style={[styles.confirmBtn, { paddingVertical: 6, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 4 }]}
                   onPress={handlePrintReport}
                 >
                   <Ionicons name="print-outline" size={16} color="#fff" />
@@ -2009,11 +2012,11 @@ const fetchDayHistory = async () => {
                   style={{
                     backgroundColor: "#ef4444",
                     paddingVertical: 6,
-                    paddingHorizontal: 12,
+                    paddingHorizontal: 10,
                     borderRadius: 10,
                     flexDirection: 'row',
                     alignItems: 'center',
-                    gap: 6
+                    gap: 4
                   }}
                   onPress={handleDayEnd}
                 >
@@ -2118,30 +2121,7 @@ const fetchDayHistory = async () => {
 
           {isTablet && (
             <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
-              <TouchableOpacity
-                style={{
-                  backgroundColor: "#3b82f6",
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 6,
-                  paddingHorizontal: 14,
-                  paddingVertical: 8,
-                  borderRadius: 10,
-                  elevation: 2,
-                  shadowColor: "#000",
-                  shadowOffset: { width: 0, height: 1 },
-                  shadowOpacity: 0.2,
-                  shadowRadius: 1.41,
-                }}
-                onPress={() => {
-                  setShowHistoryModal(true);
-                  fetchDayHistory();
-                }}
-              >
-                <Ionicons name="time-outline" size={18} color="#fff" />
-                <Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: "#fff" }}>History</Text>
-              </TouchableOpacity>
+
 
               <TouchableOpacity
                 style={[styles.confirmBtn, { paddingVertical: 8, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 6 }]}
@@ -3769,7 +3749,7 @@ const fetchDayHistory = async () => {
         animationType="fade"
         onRequestClose={() => setShowHistoryModal(false)}
       >
-        <TouchableOpacity 
+        <View 
           style={{
             flex: 1,
             backgroundColor: "rgba(0,0,0,0.6)",
@@ -3777,60 +3757,70 @@ const fetchDayHistory = async () => {
             alignItems: "center",
             padding: 20
           }}
-          activeOpacity={1}
-          onPress={() => setShowHistoryModal(false)}
         >
-          <TouchableWithoutFeedback>
-            <View 
-              style={{
-                width: "100%",
-                maxWidth: 560,
-                backgroundColor: Theme.bgCard || "#ffffff",
-                borderRadius: 24,
-                padding: 24,
-                maxHeight: "85%",
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: 10 },
-                shadowOpacity: 0.25,
-                shadowRadius: 20,
-                elevation: 10
-              }}
-            >
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16, borderBottomWidth: 1, borderBottomColor: Theme.border, paddingBottom: 12 }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                  <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Theme.infoBg, justifyContent: "center", alignItems: "center" }}>
-                    <Ionicons name="time" size={20} color="#3b82f6" />
-                  </View>
-                  <View>
-                    <Text style={{ fontFamily: Fonts.black, fontSize: 18, color: Theme.textPrimary }}>Day Start & End History</Text>
-                    <Text style={{ fontFamily: Fonts.medium, fontSize: 12, color: Theme.textSecondary }}>
-                      Recent Business Day Audit Logs
-                    </Text>
-                  </View>
+          <Pressable 
+            style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
+            onPress={() => setShowHistoryModal(false)}
+          />
+          <View 
+            style={{
+              zIndex: 2,
+              width: "100%",
+              maxWidth: 560,
+              maxHeight: "85%",
+              backgroundColor: Theme.bgCard || "#ffffff",
+              borderRadius: 24,
+              padding: 24,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 10 },
+              shadowOpacity: 0.25,
+              shadowRadius: 20,
+              elevation: 10
+            }}
+          >
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16, borderBottomWidth: 1, borderBottomColor: Theme.border, paddingBottom: 12 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Theme.infoBg, justifyContent: "center", alignItems: "center" }}>
+                  <Ionicons name="time" size={20} color="#3b82f6" />
                 </View>
-                <TouchableOpacity onPress={() => setShowHistoryModal(false)} style={{ padding: 4 }}>
-                  <Ionicons name="close-circle" size={26} color={Theme.textSecondary} />
-                </TouchableOpacity>
+                <View>
+                  <Text style={{ fontFamily: Fonts.black, fontSize: 18, color: Theme.textPrimary }}>Day Start & End History</Text>
+                  <Text style={{ fontFamily: Fonts.medium, fontSize: 12, color: Theme.textSecondary }}>
+                    Recent Business Day Audit Logs
+                  </Text>
+                </View>
               </View>
+              <TouchableOpacity onPress={() => setShowHistoryModal(false)} style={{ padding: 4 }}>
+                <Ionicons name="close-circle" size={26} color={Theme.textSecondary} />
+              </TouchableOpacity>
+            </View>
 
-              {loadingHistory ? (
-                <View style={{ paddingVertical: 40, alignItems: "center" }}>
-                  <ActivityIndicator size="large" color={Theme.primary} />
-                </View>
-              ) : historyLogs.length === 0 ? (
-                <View style={{ paddingVertical: 40, alignItems: "center" }}>
-                  <Ionicons name="document-text-outline" size={48} color={Theme.textMuted} />
-                  <Text style={{ fontFamily: Fonts.bold, fontSize: 15, color: Theme.textSecondary, marginTop: 12 }}>No audit history found</Text>
-                  <Text style={{ fontFamily: Fonts.medium, fontSize: 12, color: Theme.textMuted, marginTop: 4 }}>No Day Start or Day End logs recorded in the system.</Text>
-                </View>
-              ) : (
-                <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+            {loadingHistory ? (
+              <View style={{ paddingVertical: 40, alignItems: "center" }}>
+                <ActivityIndicator size="large" color={Theme.primary} />
+              </View>
+            ) : historyLogs.length === 0 ? (
+              <View style={{ paddingVertical: 40, alignItems: "center" }}>
+                <Ionicons name="document-text-outline" size={48} color={Theme.textMuted} />
+                <Text style={{ fontFamily: Fonts.bold, fontSize: 15, color: Theme.textSecondary, marginTop: 12 }}>No audit history found</Text>
+                <Text style={{ fontFamily: Fonts.medium, fontSize: 12, color: Theme.textMuted, marginTop: 4 }}>No Day Start or Day End logs recorded in the system.</Text>
+              </View>
+            ) : (
+              <View style={{ maxHeight: 380, minHeight: 120 }}>
+                <ScrollView 
+                  nestedScrollEnabled={true}
+                  showsVerticalScrollIndicator={true}
+                  keyboardShouldPersistTaps="handled"
+                  contentContainerStyle={{ paddingBottom: 10 }}
+                >
                   <View style={{ gap: 12 }}>
                     {historyLogs.map((log: any, idx: number) => {
                       const isStart = log.EventType === "DAY_START";
-                      const logDateStr = log.BusinessDate 
-                        ? new Date(log.BusinessDate).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
-                        : "—";
+                      const rawDateStr = typeof log.BusinessDate === 'string' 
+                        ? log.BusinessDate.split('T')[0] 
+                        : log.BusinessDate ? new Date(log.BusinessDate).toISOString().split('T')[0] : '';
+                      const [yr, mo, dy] = rawDateStr.split('-');
+                      const logDateStr = (yr && mo && dy) ? `${dy}/${mo}/${yr}` : (log.BusinessDate || "—");
 
                       return (
                         <View 
@@ -3870,24 +3860,24 @@ const fetchDayHistory = async () => {
                     })}
                   </View>
                 </ScrollView>
-              )}
-
-              <View style={{ marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: Theme.border, alignItems: "flex-end" }}>
-                <TouchableOpacity
-                  style={{
-                    paddingHorizontal: 20,
-                    paddingVertical: 10,
-                    borderRadius: 10,
-                    backgroundColor: Theme.bgMuted,
-                  }}
-                  onPress={() => setShowHistoryModal(false)}
-                >
-                  <Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: Theme.textPrimary }}>Close</Text>
-                </TouchableOpacity>
               </View>
+            )}
+
+            <View style={{ marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: Theme.border, alignItems: "flex-end" }}>
+              <TouchableOpacity
+                style={{
+                  paddingHorizontal: 20,
+                  paddingVertical: 10,
+                  borderRadius: 10,
+                  backgroundColor: Theme.bgMuted,
+                }}
+                onPress={() => setShowHistoryModal(false)}
+              >
+                <Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: Theme.textPrimary }}>Close</Text>
+              </TouchableOpacity>
             </View>
-          </TouchableWithoutFeedback>
-        </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
     </View>

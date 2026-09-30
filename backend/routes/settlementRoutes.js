@@ -218,68 +218,52 @@ router.get("/day-history", async (req, res) => {
   try {
     const { date, fromDate, toDate } = req.query;
     const pool = getPool();
-    const request = pool.request();
 
-    // Build optional WHERE clause parameters
-    let whereClause = "";
+    // Auto-backfill missing Day Start/End entries from BusinessDayLog into BusinessDayAuditLog
+    try {
+      // 1. Insert missing DAY_START audit records
+      await pool.request().query(`
+        INSERT INTO BusinessDayAuditLog (BusinessDate, EventType, EventTime, ActionBy)
+        SELECT BusinessDate, 'DAY_START', StartedAt, ISNULL(StartedBy, 'admin')
+        FROM BusinessDayLog
+        WHERE StartedAt IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM BusinessDayAuditLog 
+            WHERE BusinessDate = BusinessDayLog.BusinessDate AND EventType = 'DAY_START'
+          );
+      `);
+
+      // 2. Insert missing DAY_END audit records (only for days explicitly ended by user)
+      await pool.request().query(`
+        INSERT INTO BusinessDayAuditLog (BusinessDate, EventType, EventTime, ActionBy)
+        SELECT BusinessDate, 'DAY_END', EndedAt, ISNULL(EndedBy, 'admin')
+        FROM BusinessDayLog
+        WHERE EndedAt IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM BusinessDayAuditLog 
+            WHERE BusinessDate = BusinessDayLog.BusinessDate AND EventType = 'DAY_END'
+          );
+      `);
+    } catch (backfillErr) {
+      console.warn("⚠️ [day-history] Auto-backfill warning:", backfillErr.message);
+    }
+
+    const request = pool.request();
+    let query = `
+      SELECT AuditId, BusinessDate, EventType, EventTime, ActionBy, Remarks
+      FROM BusinessDayAuditLog
+    `;
+
     if (date) {
       request.input("date", sql.Date, date);
-      whereClause = "WHERE BusinessDate = @date";
+      query += ` WHERE BusinessDate = @date`;
     } else if (fromDate && toDate) {
       request.input("fromDate", sql.Date, fromDate);
       request.input("toDate", sql.Date, toDate);
-      whereClause = "WHERE BusinessDate BETWEEN @fromDate AND @toDate";
+      query += ` WHERE BusinessDate BETWEEN @fromDate AND @toDate`;
     }
 
-    // Query BusinessDayAuditLog directly (append-only audit trail).
-    // UNION with BusinessDayLog to backfill any Day Start / Day End events
-    // that were recorded in BusinessDayLog before the BusinessDayAuditLog
-    // table was created (i.e. historical records not yet in the audit table).
-    const query = `
-      SELECT AuditId, BusinessDate, EventType, EventTime, ActionBy, Remarks
-      FROM BusinessDayAuditLog
-      ${whereClause}
-
-      UNION ALL
-
-      -- Backfill: Day Start events from BusinessDayLog not already in audit log
-      SELECT
-        NULL          AS AuditId,
-        bdl.BusinessDate,
-        'DAY_START'   AS EventType,
-        bdl.StartedAt AS EventTime,
-        bdl.StartedBy AS ActionBy,
-        NULL          AS Remarks
-      FROM BusinessDayLog bdl
-      WHERE bdl.StartedAt IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM BusinessDayAuditLog a
-          WHERE a.BusinessDate = bdl.BusinessDate AND a.EventType = 'DAY_START'
-        )
-        ${date ? "AND bdl.BusinessDate = @date" : ""}
-        ${fromDate && toDate ? "AND bdl.BusinessDate BETWEEN @fromDate AND @toDate" : ""}
-
-      UNION ALL
-
-      -- Backfill: Day End events from BusinessDayLog not already in audit log
-      SELECT
-        NULL          AS AuditId,
-        bdl.BusinessDate,
-        'DAY_END'     AS EventType,
-        bdl.EndedAt   AS EventTime,
-        bdl.EndedBy   AS ActionBy,
-        NULL          AS Remarks
-      FROM BusinessDayLog bdl
-      WHERE bdl.EndedAt IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM BusinessDayAuditLog a
-          WHERE a.BusinessDate = bdl.BusinessDate AND a.EventType = 'DAY_END'
-        )
-        ${date ? "AND bdl.BusinessDate = @date" : ""}
-        ${fromDate && toDate ? "AND bdl.BusinessDate BETWEEN @fromDate AND @toDate" : ""}
-
-      ORDER BY EventTime DESC
-    `;
+    query += ` ORDER BY EventTime DESC, AuditId DESC`;
 
     const result = await request.query(query);
     res.json({ success: true, data: result.recordset || [] });

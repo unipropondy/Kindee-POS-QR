@@ -39,43 +39,6 @@ import { Theme } from "../constants/theme";
 import { getSingaporeDateString, parseDatabaseDate, formatToSingaporeDate } from "../utils/timezoneHelper";
 import { useAuthStore } from "../stores/authStore";
 
-const getAuthToken = async (): Promise<string | null> => {
-  let token = useAuthStore.getState().token;
-  if (!token && typeof window !== "undefined") {
-    try {
-      token = localStorage.getItem("userToken") || sessionStorage.getItem("userToken");
-      if (!token) {
-        const storedSession = sessionStorage.getItem("auth-storage");
-        const storedLocal = localStorage.getItem("auth-storage");
-        if (storedSession) {
-          token = JSON.parse(storedSession)?.state?.token;
-        } else if (storedLocal) {
-          token = JSON.parse(storedLocal)?.state?.token;
-        }
-      }
-    } catch (e) {}
-  }
-  if (!token) {
-    try {
-      token = await AsyncStorage.getItem("userToken");
-    } catch (e) {}
-  }
-  return token;
-};
-
-const authFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-  const token = await getAuthToken();
-  const headers = new Headers(init?.headers);
-  if (!headers.has("Content-Type") && (!init?.method || init.method.toUpperCase() !== "GET")) {
-    headers.set("Content-Type", "application/json");
-  }
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-  return fetch(input, { ...init, headers });
-};
-
-
 type FilterType = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY" | "CUSTOM";
 type DetailReportType = "CATEGORY" | "DISH" | "SETTLEMENT" | "ARTIST_TARGET";
 type EmailValidationResult = {
@@ -292,7 +255,7 @@ export default function SalesReport() {
       const url = isMemberType
         ? `${API_URL}/api/members/search?query=${encodeURIComponent(q)}`
         : `${API_URL}/api/credit-customers/search?query=${encodeURIComponent(q)}`;
-      const res = await authFetch(url);
+      const res = await fetch(url);
       const data = await res.json();
       setMembersList(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -394,7 +357,7 @@ export default function SalesReport() {
         if (savedSort) setSortOrder(savedSort as "NEWEST" | "HIGHEST");
 
         try {
-          const res = await authFetch(`${API_URL}/api/settlement/active-day`);
+          const res = await fetch(`${API_URL}/api/settlement/active-day`);
           const data = await res.json();
           if (data.success && data.active && data.startDate) {
             setSelectedDate(data.startDate);
@@ -456,7 +419,7 @@ export default function SalesReport() {
 
   const fetchPaymentMethods = async () => {
     try {
-      const res = await authFetch(`${API_URL}/api/sales/payment-methods`);
+      const res = await fetch(`${API_URL}/api/sales/payment-methods`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setDbPaymentModes(data);
@@ -498,7 +461,7 @@ export default function SalesReport() {
       if (sales.length === 0) setLoading(true);
 
       try {
-        const res = await authFetch(`${API_URL}/api/settlement/active-day`);
+        const res = await fetch(`${API_URL}/api/settlement/active-day`);
         const data = await res.json();
         if (data.success && data.active && data.startDate) {
           setActiveBusinessDate(data.startDate);
@@ -554,7 +517,7 @@ export default function SalesReport() {
           reportType,
           filterType: reportFilter,
         });
-        const response = await authFetch(
+        const response = await fetch(
           `${API_URL}/api/reports/${endpoint}?${params.toString()}`,
         );
 
@@ -703,7 +666,7 @@ export default function SalesReport() {
         endStr = rangeEnd;
       }
 
-      const response = await authFetch(`${API_URL}/api/sales/all?startDate=${startStr}&endDate=${endStr}`, {
+      const response = await fetch(`${API_URL}/api/sales/all?startDate=${startStr}&endDate=${endStr}`, {
         headers: { "Content-Type": "application/json" },
       });
       if (!response.ok) throw new Error("Failed to fetch sales");
@@ -751,7 +714,7 @@ export default function SalesReport() {
         endStr = rangeEnd;
       }
       const url = `${API_URL}/api/sales/range?startDate=${startStr}&endDate=${endStr}`;
-      const response = await authFetch(url);
+      const response = await fetch(url);
       const data = await response.json();
       setSummary(Array.isArray(data) ? data[0] : data);
     } catch (error) {
@@ -788,7 +751,7 @@ export default function SalesReport() {
     const userName = await AsyncStorage.getItem("userName") || "SR";
 
     const summaryUrl = `${API_URL}/api/sales/day-end-summary?startDate=${startStr}&endDate=${endStr}`;
-    const summaryRes = await authFetch(summaryUrl);
+    const summaryRes = await fetch(summaryUrl);
     const summaryData = await summaryRes.json();
 
     if (!summaryData.success) {
@@ -804,7 +767,7 @@ export default function SalesReport() {
     let items: any[] = [];
     try {
       const dishFilter = downloadFilter === "CUSTOM" ? "daily" : downloadFilter.toLowerCase();
-      const dRes = await authFetch(`${API_URL}/api/reports/dish?filter=${dishFilter}&date=${startStr}`);
+      const dRes = await fetch(`${API_URL}/api/reports/dish?filter=${dishFilter}&date=${startStr}`);
       const dData = await dRes.json();
       if (Array.isArray(dData)) {
         items = dData.map((d: any) => ({
@@ -912,7 +875,7 @@ export default function SalesReport() {
       const reportData = await fetchReportData();
       const filename = `Sales_Report_${downloadFilter}_${format(new Date(), "yyyy-MM-dd")}.pdf`;
 
-      const response = await authFetch(`${API_URL}/api/export/download-pdf`, {
+      const response = await fetch(`${API_URL}/api/export/download-pdf`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reportData }),
@@ -969,7 +932,7 @@ export default function SalesReport() {
       setIsSendingEmail(true);
       const reportData = await fetchReportData();
 
-      const response = await authFetch(`${API_URL}/api/export/email-pdf`, {
+      const response = await fetch(`${API_URL}/api/export/email-pdf`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reportData, email: emailCheck.normalized }),
@@ -1595,9 +1558,9 @@ export default function SalesReport() {
       setOrderPayments([]);
       setOrderRewards(null);
       const [itemsRes, paymentsRes, rewardsRes] = await Promise.all([
-        authFetch(`${API_URL}/api/sales/detail/${settlementId}`),
-        authFetch(`${API_URL}/api/sales/detail/${settlementId}/payments`),
-        authFetch(`${API_URL}/api/sales/detail/${settlementId}/rewards`),
+        fetch(`${API_URL}/api/sales/detail/${settlementId}`),
+        fetch(`${API_URL}/api/sales/detail/${settlementId}/payments`),
+        fetch(`${API_URL}/api/sales/detail/${settlementId}/rewards`),
       ]);
 
       if (itemsRes.ok) {
@@ -1667,7 +1630,7 @@ export default function SalesReport() {
 
   const refreshOrder = async (settlementId: string) => {
     try {
-      const res = await authFetch(`${API_URL}/api/sales/settlement/${settlementId}`);
+      const res = await fetch(`${API_URL}/api/sales/settlement/${settlementId}`);
       if (res.ok) {
         const data = await res.json();
         if (data.header) {
@@ -1691,7 +1654,7 @@ export default function SalesReport() {
           setShowChangePaymentModal(false);
           setShowMemberModal(false);
           setLoadingDetails(true);
-          const res = await authFetch(`${API_URL}/api/sales/settlement/${selectedOrder.SettlementID}/change-payment`, {
+          const res = await fetch(`${API_URL}/api/sales/settlement/${selectedOrder.SettlementID}/change-payment`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ payMode: newPayMode, splits, memberId, creditCustomerId }),
@@ -1735,7 +1698,7 @@ export default function SalesReport() {
         try {
           setShowVoidItemModal(false);
           setLoadingDetails(true);
-          const res = await authFetch(`${API_URL}/api/sales/settlement/${selectedOrder.SettlementID}/void-item`, {
+          const res = await fetch(`${API_URL}/api/sales/settlement/${selectedOrder.SettlementID}/void-item`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ orderDetailIds: itemIds }),
@@ -1764,7 +1727,7 @@ export default function SalesReport() {
     try {
       setShowCancelOrderConfirm(false);
       setLoadingDetails(true);
-      const res = await authFetch(`${API_URL}/api/sales/settlement/${selectedOrder.SettlementID}/cancel`, {
+      const res = await fetch(`${API_URL}/api/sales/settlement/${selectedOrder.SettlementID}/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: cancellationReason }),
@@ -4397,7 +4360,6 @@ export default function SalesReport() {
                       }}>
                         {(() => {
                           const activeModes = dbPaymentModes
-                            .filter((m: any) => m.active === 1 || m.Active === 1 || m.active === true || m.Active === true)
                             .map((m: any) => (m.payMode || m.PayMode || '').toUpperCase().trim())
                             .filter((mode: string) => mode.length > 0);
                           const displayModes = activeModes.length > 0 ? activeModes : ["CASH", "CARD", "NETS", "PAYNOW", "MEMBER", "CREDIT"];
@@ -4472,7 +4434,6 @@ export default function SalesReport() {
                       {changePaymentSplits.map((split, idx) => {
                         const nextMode = () => {
                           const activeModes = dbPaymentModes
-                            .filter((m: any) => m.active === 1 || m.Active === 1 || m.active === true || m.Active === true)
                             .map((m: any) => (m.payMode || m.PayMode || '').toUpperCase().trim())
                             .filter((mode: string) => mode.length > 0);
                           const displayModes = activeModes.length > 0 ? activeModes : ["CASH", "CARD", "NETS", "PAYNOW", "MEMBER", "CREDIT"];

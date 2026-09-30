@@ -122,7 +122,10 @@ router.get("/payment/:terminal/:userId", async (req, res) => {
       if (raw === "P-A-Y-T-M") return "PAYTM";
       if (raw === "CASH" || raw === "CAS" || raw === "1") return "CASH";
       if (raw.includes("CARD") || raw.includes("VISA") || raw.includes("MASTER") || raw.includes("AMEX") || raw.includes("DINERS")) return "CARD";
-      if (raw.includes("PAYNOW") || raw.includes("GRAB") || raw.includes("FOODPANDA") || raw === "3" || raw.includes("PAY NOW")) return "PAYNOW";
+      // GRAB and FOODPANDA are distinct delivery platforms — do NOT merge them into PAYNOW
+      if (raw.includes("GRAB")) return "GRAB";
+      if (raw.includes("FOODPANDA")) return "FOODPANDA";
+      if (raw.includes("PAYNOW") || raw === "3" || raw.includes("PAY NOW")) return "PAYNOW";
       if (raw.includes("UPI") || raw === "4" || raw.includes("GPAY") || raw.includes("PHONE") || raw.includes("PAYTM")) return "UPI";
       if (raw.includes("NETS") || raw === "2") return "NETS";
       if (raw.includes("MEMBER") || raw === "5") return "MEMBER";
