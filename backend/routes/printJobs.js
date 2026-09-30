@@ -239,25 +239,33 @@ router.post('/', authenticateBridge, async (req, res) => {
       const kitchenRes = await pool.request()
         .input('KitchenTypeValue', sql.NVarChar(50), kitchenTypeValue ? String(kitchenTypeValue) : '0')
         .query(`
-          SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName 
+          SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName, IsEnabled 
           FROM PrintMaster 
           WHERE PrinterType = 2 AND CAST(KitchenTypeValue AS VARCHAR(50)) = CAST(@KitchenTypeValue AS VARCHAR(50)) AND IsActive = 1 
             AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')
         `);
       if (kitchenRes.recordset.length > 0) {
+        if (kitchenRes.recordset[0].IsEnabled === 0 || kitchenRes.recordset[0].IsEnabled === false) {
+          console.log(`[PrintJobs] 🚫 Kitchen Printer for KitchenTypeValue=${kitchenTypeValue} is DISABLED (IsEnabled=0). Skipping job.`);
+          return res.json({ success: true, message: 'Print job skipped because printer is disabled' });
+        }
         printerIp = kitchenRes.recordset[0].PrinterIP;
         printerName = kitchenRes.recordset[0].PrinterName;
+      } else {
+        // Kitchen printer is disabled or has no IP address assigned — DO NOT fall back to Cashier Printer for Kitchen items
+        console.log(`[PrintJobs] 🚫 No enabled kitchen printer IP configured for KitchenTypeValue=${kitchenTypeValue}. Skipping job.`);
+        return res.json({ success: true, message: 'Print job skipped because no kitchen printer IP is configured' });
       }
     }
 
-    // Fallback or Direct check for Cashier (1) or TakeAway (3) or if Kitchen Printer not found/not configured with IP
+    // Fallback or Direct check for Cashier (1) or TakeAway (3) or KDS (4)
     if (!printerIp || printerIp.trim() === '') {
       const printerRes = await pool.request()
         .input('PrinterType', sql.Int, pType)
         .query(`
           SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName 
           FROM PrintMaster 
-          WHERE PrinterType = @PrinterType AND IsActive = 1 
+          WHERE PrinterType = @PrinterType AND IsActive = 1 AND IsEnabled = 1
             AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')
         `);
       if (printerRes.recordset.length > 0) {
@@ -266,13 +274,13 @@ router.post('/', authenticateBridge, async (req, res) => {
       }
     }
 
-    // Ultimate fallback to Cashier Printer (Type 1) for non-KDS jobs
-    if ((!printerIp || printerIp.trim() === '') && pType !== 4) {
+    // Ultimate fallback to Cashier Printer (Type 1) ONLY for cashier/receipt print jobs (pType === 1)
+    if ((!printerIp || printerIp.trim() === '') && pType === 1) {
       const cashierRes = await pool.request()
         .query(`
           SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName 
           FROM PrintMaster 
-          WHERE PrinterType = 1 AND IsActive = 1 
+          WHERE PrinterType = 1 AND IsActive = 1 AND IsEnabled = 1
             AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')
         `);
       if (cashierRes.recordset.length > 0) {

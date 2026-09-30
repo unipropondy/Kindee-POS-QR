@@ -271,6 +271,13 @@ async function queueQRPrintJobs(pool, sql, opts) {
   });
 
   for (const [kCode, group] of Object.entries(kitchenGroups)) {
+    const kNameLower = (group.kitchenName || '').toLowerCase();
+    // Skip beverage/dessert kitchen KOT for QR orders
+    if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert')) {
+      console.log(`[PrintHelper] 🥤 Skipping KOT print job for Beverage/Dessert kitchen "${group.kitchenName}" (KTV=${kCode}) for QR customer order ${orderId}`);
+      continue;
+    }
+
     const kotData = {
       orderId,
       orderNo: orderId,
@@ -287,11 +294,12 @@ async function queueQRPrintJobs(pool, sql, opts) {
     try {
       const printerRes = await pool.request()
         .input('KTN', sql.NVarChar(100), group.kitchenName || '')
+        .input('KTV', sql.NVarChar(50), String(kCode || '0'))
         .query(`
           SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName
           FROM PrintMaster
           WHERE PrinterType = 2
-            AND LOWER(TRIM(KitchenTypeName)) = LOWER(TRIM(@KTN))
+            AND (LOWER(TRIM(KitchenTypeName)) = LOWER(TRIM(@KTN)) OR CAST(KitchenTypeValue AS VARCHAR(50)) = @KTV)
             AND IsActive = 1 AND IsEnabled = 1
             AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')
         `);
