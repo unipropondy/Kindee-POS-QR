@@ -271,12 +271,6 @@ async function queueQRPrintJobs(pool, sql, opts) {
   });
 
   for (const [kCode, group] of Object.entries(kitchenGroups)) {
-    const kNameLower = (group.kitchenName || '').toLowerCase();
-    // Skip beverage/dessert kitchen KOT for QR orders
-    if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert')) {
-      console.log(`[PrintHelper] 🥤 Skipping KOT print job for Beverage/Dessert kitchen "${group.kitchenName}" (KTV=${kCode}) for QR customer order ${orderId}`);
-      continue;
-    }
 
     const kotData = {
       orderId,
