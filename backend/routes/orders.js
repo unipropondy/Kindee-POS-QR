@@ -1199,12 +1199,73 @@ router.post("/save-cart", async (req, res) => {
   }
 });
 
+function getNewlyAddedItems(sentItems = [], existingRows = []) {
+  if (!existingRows || existingRows.length === 0) {
+    return sentItems;
+  }
+
+  const existingLineIds = new Set(existingRows.map(r => String(r.lineItemId || '')).filter(Boolean));
+
+  const getDishSignature = (item) => {
+    const dishId = String(item.id || item.DishId || item.dishId || '').toLowerCase();
+    const name = String(item.name || item.DishName || '').toLowerCase().trim();
+    const note = String(item.note || item.notes || item.Remarks || item.remarks || '').toLowerCase().trim();
+
+    let mods = '';
+    if (item.modifiers && Array.isArray(item.modifiers)) {
+      mods = item.modifiers.map(m => String(m.ModifierId || m.id || m.name || m.ModifierName || '').toLowerCase()).sort().join(',');
+    } else if (item.ModifiersJSON) {
+      mods = typeof item.ModifiersJSON === 'string' ? item.ModifiersJSON : JSON.stringify(item.ModifiersJSON);
+    }
+
+    let combos = '';
+    if (item.comboSelections && Array.isArray(item.comboSelections)) {
+      combos = JSON.stringify(item.comboSelections);
+    } else if (item.ComboDetailsJSON) {
+      combos = typeof item.ComboDetailsJSON === 'string' ? item.ComboDetailsJSON : JSON.stringify(item.ComboDetailsJSON);
+    }
+
+    return `${dishId || name}_mod:${mods}_combo:${combos}_note:${note}`;
+  };
+
+  const existingSigQty = {};
+  existingRows.forEach(row => {
+    const sig = getDishSignature(row);
+    existingSigQty[sig] = (existingSigQty[sig] || 0) + (Number(row.qty || row.Quantity) || 1);
+  });
+
+  const newlyAdded = [];
+
+  sentItems.forEach(item => {
+    if (item.lineItemId && existingLineIds.has(String(item.lineItemId))) {
+      return;
+    }
+
+    const sig = getDishSignature(item);
+    const itemQty = Number(item.qty || item.quantity) || 1;
+    const existingQty = existingSigQty[sig] || 0;
+
+    if (existingQty <= 0) {
+      newlyAdded.push(item);
+    } else if (itemQty > existingQty) {
+      const delta = itemQty - existingQty;
+      newlyAdded.push({ ...item, qty: delta, quantity: delta });
+      existingSigQty[sig] = 0;
+    } else {
+      existingSigQty[sig] -= itemQty;
+    }
+  });
+
+  return newlyAdded;
+}
+
 router.post("/send", async (req, res) => {
   try {
     const { tableId, orderId, items, userId, discountAmount, discountRemarks, mobileNo, customerName } = req.body;
     const pool = await poolPromise;
     const cleanId = await getCleanTableId(pool, tableId);
 
+    let existingRowsBeforeSend = [];
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
     try {
@@ -1346,6 +1407,7 @@ router.post("/send", async (req, res) => {
           `);
 
         const existingRows = existingDbOrderItems.recordset || [];
+        existingRowsBeforeSend = existingRows;
         if (existingRows.length > 0) {
           const sentLineItemIds = new Set(sentItems.map((i) => i.lineItemId).filter(Boolean));
           existingRows.forEach((row) => {
@@ -1423,13 +1485,18 @@ router.post("/send", async (req, res) => {
             .query("SELECT TableNumber FROM TableMaster WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))");
           const tableNo = tableQuery.recordset[0]?.TableNumber ? String(tableQuery.recordset[0].TableNumber).trim() : "";
 
-          await queueQRPrintJobs(pool, sql, {
-            orderId: finalOrderId,
-            tableNo,
-            sentItems,
-            isAdditional: isAdditionalOrder,
-          });
-          console.log(`[QR Print Queue] Queued KOT/KDS jobs for Order ${finalOrderId} Table ${tableNo}`);
+          const itemsToPrint = getNewlyAddedItems(sentItems, existingRowsBeforeSend);
+          if (itemsToPrint.length > 0) {
+            await queueQRPrintJobs(pool, sql, {
+              orderId: finalOrderId,
+              tableNo,
+              sentItems: itemsToPrint,
+              isAdditional: isAdditionalOrder,
+            });
+            console.log(`[QR Print Queue] Queued KOT/KDS jobs for Order ${finalOrderId} Table ${tableNo} (${itemsToPrint.length} new items)`);
+          } else {
+            console.log(`[QR Print Queue] Skipping print queue - no new items for Order ${finalOrderId} Table ${tableNo}`);
+          }
         } catch (queueErr) {
           console.error("❌ Failed to queue QR KOT/KDS print jobs:", queueErr.message);
         }

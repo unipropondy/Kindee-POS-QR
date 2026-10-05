@@ -27,8 +27,8 @@ function formatKOTThermalText(data, type = 'NEW') {
 
   // ── Timestamp ───────────────────────────────────────────────────────
   const now = new Date();
-  const dateStr = new Intl.DateTimeFormat('en-GB', { day:'2-digit', month:'2-digit', year:'2-digit' }).format(now);
-  const timeStr = now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', hour12:false });
+  const dateStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Singapore', day:'2-digit', month:'2-digit', year:'numeric' }).format(now);
+  const timeStr = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Singapore', hour:'2-digit', minute:'2-digit', hour12:false });
 
   const DIV = '[L]------------------------------------------------\n';
 
@@ -273,7 +273,7 @@ async function queueQRPrintJobs(pool, sql, opts) {
   for (const [kCode, group] of Object.entries(kitchenGroups)) {
     const kNameLower = (group.kitchenName || '').toLowerCase();
     // Skip beverage/dessert kitchen KOT for QR orders
-    if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert')) {
+    if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert') || kNameLower.includes('drink') || kNameLower.includes('bar')) {
       console.log(`[PrintHelper] 🥤 Skipping KOT print job for Beverage/Dessert kitchen "${group.kitchenName}" (KTV=${kCode}) for QR customer order ${orderId}`);
       continue;
     }

@@ -18,12 +18,12 @@ export function getSingaporeDateString(date: Date = new Date()): string {
 
 export function formatToSingaporeDate(
   dateInput: Date | string | number,
-  options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
+  options: Intl.DateTimeFormatOptions = { day: '2-digit', month: '2-digit', year: 'numeric' }
 ): string {
   if (!dateInput) return "";
   const date = parseDatabaseDate(dateInput);
   if (isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat('en-US', {
+  return new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Singapore',
     ...options
   }).format(date);

@@ -521,7 +521,7 @@ export default function CartScreen() {
               try {
                 const kitchenGroups: Record<string, any[]> = {};
                 const expandedItems: any[] = [];
-                cart.filter((i: any) => i.status !== 'VOIDED' && !i.isVoided).forEach((item: any) => {
+                cart.filter((i: any) => i.status !== 'VOIDED' && !i.isVoided && !isItemSent(i)).forEach((item: any) => {
                   expandedItems.push(item);
                   if (item.comboSelections && item.comboSelections.length > 0) {
                     item.comboSelections.forEach((g: any) => {
@@ -552,6 +552,11 @@ export default function CartScreen() {
                   kitchenGroups[kCode].push(item);
                 });
                 for (const [kCode, items] of Object.entries(kitchenGroups)) {
+                  const kNameLower = (items[0]?.KitchenTypeName || items[0]?.kitchenTypeName || '').toLowerCase();
+                  if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert') || kNameLower.includes('drink') || kNameLower.includes('bar')) {
+                    console.log(`[cart.tsx] 🥤 Skipping KOT print for Beverage/Dessert kitchen "${items[0]?.KitchenTypeName}" (KTV=${kCode})`);
+                    continue;
+                  }
                   const printerIp = items[0].PrinterIP;
                   const kotData = { orderId: officialOrderId, orderNo: officialOrderId, tableNo: context.orderType === "DINE_IN" ? context.tableNo : `TW-${context.takeawayNo}`, deviceNo: "1", waiterName: user?.userName || "Staff", items: items, kitchenName: items[0].KitchenTypeName || "KITCHEN" };
                   const isAdditional = cart.some((i: any) => isItemSent(i));
@@ -567,7 +572,7 @@ export default function CartScreen() {
                     tableNo: context.orderType === "DINE_IN" ? context.tableNo : `TW-${context.takeawayNo}`,
                     deviceNo: "1",
                     waiterName: user?.userName || "Staff",
-                    items: cart.filter((i: any) => i.status !== 'VOIDED' && !i.isVoided),
+                    items: cart.filter((i: any) => i.status !== 'VOIDED' && !i.isVoided && !isItemSent(i)),
                     kitchenName: "KDS",
                   };
                   await UniversalPrinter.printKDSOrder(kdsData, "SYSTEM");

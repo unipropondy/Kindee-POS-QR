@@ -102,27 +102,28 @@ export default function CustomerItemDetailsScreen() {
 
   const handleSelectOption = (groupId: string, optionDishId: string, isMulti: boolean, minSel: number, maxSel: number) => {
     const current = selections[groupId] || [];
-    if (isMulti) {
-      if (current.includes(optionDishId)) {
-        if (current.length > minSel) {
-          setSelections({
-            ...selections,
-            [groupId]: current.filter(id => id !== optionDishId),
-          });
-        }
-      } else {
+    if (current.includes(optionDishId)) {
+      // Always allow unclicking / deselecting an option
+      setSelections({
+        ...selections,
+        [groupId]: current.filter(id => id !== optionDishId),
+      });
+    } else {
+      if (isMulti) {
         if (current.length < maxSel) {
           setSelections({
             ...selections,
             [groupId]: [...current, optionDishId],
           });
+        } else {
+          Alert.alert("Selection Limit", `You can select up to ${maxSel} option(s) for this group.`);
         }
+      } else {
+        setSelections({
+          ...selections,
+          [groupId]: [optionDishId],
+        });
       }
-    } else {
-      setSelections({
-        ...selections,
-        [groupId]: [optionDishId],
-      });
     }
   };
 

@@ -1126,7 +1126,7 @@ class UniversalPrinter {
     const orderNo     = data.orderNo || data.orderId || "";
     const kitchenName = data.kitchenName || "";
 
-    const kotDateStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", day: "2-digit", month: "2-digit", year: "2-digit" }).format(new Date());
+    const kotDateStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
     const kotTimeStr = formatToSingaporeTime(new Date(), { hour: "2-digit", minute: "2-digit", hour12: false });
 
     const DIV = "[L]------------------------------------------------\n";
@@ -2200,9 +2200,9 @@ class UniversalPrinter {
         });
 
         for (const [kCode, groupItems] of Object.entries(kitchenGroups)) {
-          const kNameLower = (groupItems[0].KitchenTypeName || '').toLowerCase();
+          const kNameLower = (groupItems[0].KitchenTypeName || groupItems[0].kitchenTypeName || '').toLowerCase();
           // Skip KOT print for Beverage/Dessert kitchen
-          if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert')) {
+          if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert') || kNameLower.includes('drink') || kNameLower.includes('bar')) {
             console.log(`🖨️ [UniversalPrinter] 🥤 Skipping KOT print for Beverage/Dessert kitchen group ${kCode} (${groupItems[0].KitchenTypeName})`);
             continue;
           }
