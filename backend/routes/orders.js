@@ -1486,16 +1486,17 @@ router.post("/send", async (req, res) => {
           const tableNo = tableQuery.recordset[0]?.TableNumber ? String(tableQuery.recordset[0].TableNumber).trim() : "";
 
           const itemsToPrint = getNewlyAddedItems(sentItems, existingRowsBeforeSend);
-          if (itemsToPrint.length > 0) {
+          const finalItemsToPrint = (itemsToPrint && itemsToPrint.length > 0) ? itemsToPrint : sentItems;
+          if (finalItemsToPrint.length > 0) {
             await queueQRPrintJobs(pool, sql, {
               orderId: finalOrderId,
               tableNo,
-              sentItems: itemsToPrint,
+              sentItems: finalItemsToPrint,
               isAdditional: isAdditionalOrder,
             });
-            console.log(`[QR Print Queue] Queued KOT/KDS jobs for Order ${finalOrderId} Table ${tableNo} (${itemsToPrint.length} new items)`);
+            console.log(`[QR Print Queue] Queued KOT/KDS jobs for Order ${finalOrderId} Table ${tableNo} (${finalItemsToPrint.length} items)`);
           } else {
-            console.log(`[QR Print Queue] Skipping print queue - no new items for Order ${finalOrderId} Table ${tableNo}`);
+            console.log(`[QR Print Queue] Skipping print queue - no items for Order ${finalOrderId} Table ${tableNo}`);
           }
         } catch (queueErr) {
           console.error("❌ Failed to queue QR KOT/KDS print jobs:", queueErr.message);

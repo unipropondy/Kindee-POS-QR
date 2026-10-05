@@ -245,7 +245,6 @@ function _formatItem(item) {
 /**
  * Queue KOT and KDS print jobs directly into PrintJobQueue for a QR order.
  * Called by the backend /send route after the order transaction commits.
- * This avoids the duplicate-print risk that comes from frontend-socket-triggered printing.
  *
  * @param {object} pool  - mssql connection pool
  * @param {object} sql   - mssql sql object
@@ -255,6 +254,11 @@ async function queueQRPrintJobs(pool, sql, opts) {
   const { orderId, tableNo, sentItems = [], isAdditional = false } = opts;
   const type = isAdditional ? 'ADDITIONAL' : 'NEW';
   const STORE_ID = 'STORE_001';
+
+  if (!sentItems || sentItems.length === 0) {
+    console.warn(`[PrintHelper] No items to queue for order ${orderId}`);
+    return;
+  }
 
   // 1. Group items by KitchenTypeCode → one KOT job per kitchen
   const kitchenGroups = {};
@@ -272,9 +276,9 @@ async function queueQRPrintJobs(pool, sql, opts) {
 
   for (const [kCode, group] of Object.entries(kitchenGroups)) {
     const kNameLower = (group.kitchenName || '').toLowerCase();
-    // Skip beverage/dessert kitchen KOT for QR orders
+    // Skip beverage/dessert/drink/bar kitchen KOT for QR orders
     if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert') || kNameLower.includes('drink') || kNameLower.includes('bar')) {
-      console.log(`[PrintHelper] 🥤 Skipping KOT print job for Beverage/Dessert kitchen "${group.kitchenName}" (KTV=${kCode}) for QR customer order ${orderId}`);
+      console.log(`[PrintHelper] 🥤 Skipping KOT print job for Beverage/Dessert kitchen "${group.kitchenName}" (KTV=${kCode}) for QR order ${orderId}`);
       continue;
     }
 
@@ -288,32 +292,68 @@ async function queueQRPrintJobs(pool, sql, opts) {
     };
     const thermalText = formatKOTThermalText(kotData, type);
 
-    // Resolve kitchen printer IP from PrintMaster
+    // Resolve kitchen printer from PrintMaster with fallbacks
     let printerIp = '';
     let printerName = '';
     try {
+      // Try 1: Exact match by KitchenTypeName or KitchenTypeValue for PrinterType = 2
       const printerRes = await pool.request()
         .input('KTN', sql.NVarChar(100), group.kitchenName || '')
         .input('KTV', sql.NVarChar(50), String(kCode || '0'))
         .query(`
-          SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName
+          SELECT TOP 1 
+            ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, 
+            PrinterName
           FROM PrintMaster
           WHERE PrinterType = 2
             AND (LOWER(TRIM(KitchenTypeName)) = LOWER(TRIM(@KTN)) OR CAST(KitchenTypeValue AS VARCHAR(50)) = @KTV)
-            AND IsActive = 1 AND IsEnabled = 1
-            AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')
+            AND (IsActive = 1 OR IsActive IS NULL)
         `);
+
       if (printerRes.recordset.length > 0) {
-        printerIp   = printerRes.recordset[0].PrinterIP;
-        printerName = printerRes.recordset[0].PrinterName;
+        printerIp   = printerRes.recordset[0].PrinterIP || printerRes.recordset[0].PrinterName || '';
+        printerName = printerRes.recordset[0].PrinterName || group.kitchenName;
+      }
+
+      // Try 2: Any active Kitchen printer (PrinterType = 2) if exact match not found
+      if (!printerIp) {
+        const fallbackKitchenRes = await pool.request().query(`
+          SELECT TOP 1 
+            ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, 
+            PrinterName
+          FROM PrintMaster
+          WHERE PrinterType = 2 AND (IsActive = 1 OR IsActive IS NULL)
+        `);
+        if (fallbackKitchenRes.recordset.length > 0) {
+          printerIp   = fallbackKitchenRes.recordset[0].PrinterIP || fallbackKitchenRes.recordset[0].PrinterName || '';
+          printerName = fallbackKitchenRes.recordset[0].PrinterName || group.kitchenName;
+        }
+      }
+
+      // Try 3: Any active Receipt printer (PrinterType = 1) if no kitchen printer defined
+      if (!printerIp) {
+        const fallbackReceiptRes = await pool.request().query(`
+          SELECT TOP 1 
+            ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, 
+            PrinterName
+          FROM PrintMaster
+          WHERE PrinterType = 1 AND (IsActive = 1 OR IsActive IS NULL)
+        `);
+        if (fallbackReceiptRes.recordset.length > 0) {
+          printerIp   = fallbackReceiptRes.recordset[0].PrinterIP || fallbackReceiptRes.recordset[0].PrinterName || '';
+          printerName = fallbackReceiptRes.recordset[0].PrinterName || 'Receipt Printer';
+        }
       }
     } catch (err) {
       console.warn(`[PrintHelper] Could not resolve kitchen printer for name=${group.kitchenName}:`, err.message);
     }
 
+    // Ultimate fallback values so print job is never dropped
     if (!printerIp) {
-      console.warn(`[PrintHelper] No kitchen printer IP for KTV=${kCode} — skipping KOT`);
-      continue;
+      printerIp = 'DEFAULT';
+    }
+    if (!printerName) {
+      printerName = group.kitchenName || 'Kitchen Printer';
     }
 
     const jobId = require('crypto').randomUUID();
@@ -330,46 +370,52 @@ async function queueQRPrintJobs(pool, sql, opts) {
         VALUES
           (@JobId, @StoreId, @PrinterName, @PrinterIp, @PrinterPort, @Content, 'PENDING', GETDATE())
       `);
-    console.log(`[PrintHelper] ✅ KOT queued for kitchen "${group.kitchenName}" → ${printerIp} [job: ${jobId}]`);
+    console.log(`[PrintHelper] ✅ KOT queued for kitchen "${group.kitchenName}" → ${printerIp} (${printerName}) [job: ${jobId}]`);
   }
 
   // 2. Queue KDS print (printerType = 4) — one job with ALL items grouped by kitchen
   try {
+    let kdsIp = '';
+    let kdsName = '';
     const kdsRes = await pool.request()
       .query(`
         SELECT TOP 1 ISNULL(NULLIF(PrinterIP, ''), NULLIF(PrinterPath, '')) as PrinterIP, PrinterName
         FROM PrintMaster
-        WHERE PrinterType = 4 AND IsActive = 1
-          AND (PrinterIP IS NOT NULL AND PrinterIP <> '' OR PrinterPath IS NOT NULL AND PrinterPath <> '')
+        WHERE PrinterType = 4 AND (IsActive = 1 OR IsActive IS NULL)
       `);
 
     if (kdsRes.recordset.length > 0) {
-      const { PrinterIP, PrinterName } = kdsRes.recordset[0];
-      const kdsData = {
-        orderId,
-        orderNo: orderId,
-        tableNo,
-        waiterName: 'QR Order',
-        items: sentItems,
-        kitchenName: 'KDS',
-      };
-      const kdsText = formatKOTThermalText(kdsData, 'KDS_PRINT');
-      const kdsJobId = require('crypto').randomUUID();
-      await pool.request()
-        .input('JobId',       sql.UniqueIdentifier, kdsJobId)
-        .input('StoreId',     sql.NVarChar(50),     STORE_ID)
-        .input('PrinterName', sql.NVarChar(100),    PrinterName)
-        .input('PrinterIp',   sql.NVarChar(100),    PrinterIP)
-        .input('PrinterPort', sql.Int,              9100)
-        .input('Content',     sql.NVarChar(sql.MAX), kdsText)
-        .query(`
-          INSERT INTO PrintJobQueue
-            (JobId, StoreId, PrinterName, PrinterIp, PrinterPort, Content, Status, CreatedOn)
-          VALUES
-            (@JobId, @StoreId, @PrinterName, @PrinterIp, @PrinterPort, @Content, 'PENDING', GETDATE())
-        `);
-      console.log(`[PrintHelper] ✅ KDS queued → ${PrinterIP} [job: ${kdsJobId}]`);
+      kdsIp   = kdsRes.recordset[0].PrinterIP || kdsRes.recordset[0].PrinterName || 'KDS_PRINTER';
+      kdsName = kdsRes.recordset[0].PrinterName || 'KDS Printer';
+    } else {
+      kdsIp   = 'KDS_PRINTER';
+      kdsName = 'KDS Screen/Printer';
     }
+
+    const kdsData = {
+      orderId,
+      orderNo: orderId,
+      tableNo,
+      waiterName: 'QR Order',
+      items: sentItems,
+      kitchenName: 'KDS',
+    };
+    const kdsText = formatKOTThermalText(kdsData, 'KDS_PRINT');
+    const kdsJobId = require('crypto').randomUUID();
+    await pool.request()
+      .input('JobId',       sql.UniqueIdentifier, kdsJobId)
+      .input('StoreId',     sql.NVarChar(50),     STORE_ID)
+      .input('PrinterName', sql.NVarChar(100),    kdsName)
+      .input('PrinterIp',   sql.NVarChar(100),    kdsIp)
+      .input('PrinterPort', sql.Int,              9100)
+      .input('Content',     sql.NVarChar(sql.MAX), kdsText)
+      .query(`
+        INSERT INTO PrintJobQueue
+          (JobId, StoreId, PrinterName, PrinterIp, PrinterPort, Content, Status, CreatedOn)
+        VALUES
+          (@JobId, @StoreId, @PrinterName, @PrinterIp, @PrinterPort, @Content, 'PENDING', GETDATE())
+      `);
+    console.log(`[PrintHelper] ✅ KDS queued → ${kdsIp} (${kdsName}) [job: ${kdsJobId}]`);
   } catch (kdsErr) {
     console.warn('[PrintHelper] KDS print queue failed:', kdsErr.message);
   }
