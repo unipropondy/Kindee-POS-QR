@@ -389,15 +389,15 @@ const LogoutButtonWeb = ({ onConfirm }: { onConfirm: () => void }) => {
 
 export default function CustomerMenuScreen() {
   const router = useRouter();
-  const { kitchens, allDishes, fetchMenu, fetchGroups, modifierCache, isLoading, forceRefreshMenu } = useMenuStore();
+  const { kitchens, allDishes, dishGroups: storeDishGroups, fetchMenu, fetchGroups, modifierCache, isLoading, forceRefreshMenu } = useMenuStore();
   const { carts, currentContextId, addToCartGlobal } = useCartStore();
   const orderContext = useOrderContextStore((state) => state.currentOrder);
 
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedKitchenId, setSelectedKitchenId] = useState<string | null>(null);
-  const [dishGroups, setDishGroups] = useState<any[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [groupsLoading, setGroupsLoading] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const onRefresh = async () => {
@@ -650,18 +650,25 @@ export default function CustomerMenuScreen() {
   }, [kitchens]);
 
   // Load groups for the selected Category
+  // FIX: Immediately reset selectedGroupId to null when kitchen changes, so we never
+  // filter by a stale group ID during the async fetchGroups gap.
   useEffect(() => {
-    if (selectedKitchenId) {
-      fetchGroups(selectedKitchenId).then((groups) => {
-        const publishedGroups = groups.filter(g => g.IsPublished !== 1 && g.IsPublished !== true && g.IsPublished !== '1');
-        setDishGroups(publishedGroups);
-        if (publishedGroups && publishedGroups.length > 0) {
-          setSelectedGroupId(publishedGroups[0].DishGroupId);
-        } else {
-          setSelectedGroupId(null);
-        }
-      });
-    }
+    if (!selectedKitchenId) return;
+    // Reset immediately so filteredDishes shows all dishes for this category
+    // while groups are loading, rather than showing nothing.
+    setSelectedGroupId(null);
+    setGroupsLoading(true);
+    fetchGroups(selectedKitchenId).then((groups) => {
+      const publishedGroups = groups.filter(g => g.IsPublished !== 1 && g.IsPublished !== true && g.IsPublished !== '1');
+      if (publishedGroups && publishedGroups.length > 0) {
+        setSelectedGroupId(publishedGroups[0].DishGroupId);
+      } else {
+        setSelectedGroupId(null);
+      }
+      setGroupsLoading(false);
+    }).catch(() => {
+      setGroupsLoading(false);
+    });
   }, [selectedKitchenId]);
 
   if (isSessionClosed) {
@@ -699,6 +706,14 @@ export default function CustomerMenuScreen() {
     );
   }
 
+  // FIX: Read groups directly from the Zustand store (always in sync with fetch state)
+  // instead of a local state copy that has a race condition window where it's still [].
+  const currentDishGroups: any[] = selectedKitchenId
+    ? (storeDishGroups[selectedKitchenId] || []).filter(
+        (g: any) => g.IsPublished !== 1 && g.IsPublished !== true && g.IsPublished !== '1'
+      )
+    : [];
+
   const filteredDishes = allDishes.filter((dish: any) => {
     // Hide if unpublished on Dish, Category, or Group level for QR only
     const isPub = dish.IsPublished !== undefined ? dish.IsPublished : dish.isPublished;
@@ -715,13 +730,15 @@ export default function CustomerMenuScreen() {
 
     const query = search.trim().toLowerCase();
     if (query.length > 0) {
+      // When searching, show all matching dishes regardless of selected category/group
       const nameMatch = dish.Name?.toLowerCase().includes(query);
       const descMatch = dish.Description?.toLowerCase().includes(query);
       return nameMatch || descMatch;
     }
-    
+
+    // FIX: Use store-derived groups (always up-to-date) instead of stale local state
     // Check if the dish's group belongs to the currently selected category
-    const belongsToCategory = dishGroups.some(g => g.DishGroupId === dish.DishGroupId);
+    const belongsToCategory = currentDishGroups.some((g: any) => g.DishGroupId === dish.DishGroupId);
     
     // If a group is selected, match it; otherwise ensure it belongs to the selected category
     const matchesGroup = selectedGroupId
@@ -834,12 +851,12 @@ export default function CustomerMenuScreen() {
       </View>
 
       {/* Horizontal Dish Group Pill Bar */}
-      {dishGroups.length > 0 && (
+      {currentDishGroups.length > 0 && (
         <View style={styles.groupsContainer}>
           <FlatList
             horizontal
             showsHorizontalScrollIndicator={false}
-            data={dishGroups}
+            data={currentDishGroups}
             keyExtractor={(item) => item.DishGroupId}
             renderItem={({ item }) => {
               const isSelected = selectedGroupId === item.DishGroupId;
@@ -860,7 +877,7 @@ export default function CustomerMenuScreen() {
       )}
 
       {/* Main Dishes Catalog */}
-      {isLoading ? (
+      {(isLoading || groupsLoading) ? (
         <ActivityIndicator size="large" color={Theme.primary} style={styles.loader} />
       ) : (
         <FlatList
