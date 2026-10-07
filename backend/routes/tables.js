@@ -132,7 +132,7 @@ router.post("/lock-persistent", async (req, res) => {
       SET Status = 5, LockedByName = @lockedByName, TotalAmount = 0, StartTime = NULL, ModifiedBy = @ModifiedBy, ModifiedOn = GETDATE(), CustomerName = NULL, Pax = NULL
       OUTPUT INSERTED.TableNumber, INSERTED.DiningSection, CONVERT(VARCHAR, INSERTED.ModifiedOn, 126) AS ModifiedOn
       INTO @temp
-      WHERE TableId = @tableId;
+      WHERE TableId = TRY_CAST(@tableId AS UNIQUEIDENTIFIER) OR CAST(TableNumber AS VARCHAR(50)) = @tableId;
 
       SELECT * FROM @temp;
     `);
@@ -185,7 +185,7 @@ router.post("/unlock-persistent", async (req, res) => {
         SET Status = 0, entry_status = NULL, LockedByName = NULL, TotalAmount = 0, StartTime = NULL, ModifiedBy = @ModifiedBy, ModifiedOn = GETDATE(), CustomerName = NULL, Pax = NULL
         OUTPUT INSERTED.TableNumber, INSERTED.DiningSection, CONVERT(VARCHAR, INSERTED.ModifiedOn, 126) AS ModifiedOn
         INTO @temp
-        WHERE TableId = @tableId;
+        WHERE TableId = TRY_CAST(@tableId AS UNIQUEIDENTIFIER) OR CAST(TableNumber AS VARCHAR(50)) = @tableId;
 
         SELECT * FROM @temp;
       `);
@@ -268,7 +268,7 @@ router.post("/save-guest", async (req, res) => {
         CONVERT(VARCHAR, INSERTED.ModifiedOn, 126) AS ModifiedOn,
         INSERTED.entry_status AS entryStatus
       INTO @temp
-      WHERE TableId = @tableId;
+      WHERE TableId = TRY_CAST(@tableId AS UNIQUEIDENTIFIER) OR CAST(TableNumber AS VARCHAR(50)) = @tableId;
 
       SELECT * FROM @temp;
     `);
@@ -526,7 +526,7 @@ router.put("/status", async (req, res) => {
           ELSE 0 
         END AS isHoldOvertime
       INTO @temp
-      WHERE TableId = @tableId;
+      WHERE TableId = TRY_CAST(@tableId AS UNIQUEIDENTIFIER) OR CAST(TableNumber AS VARCHAR(50)) = @tableId;
 
       SELECT * FROM @temp;
     `);
@@ -595,7 +595,7 @@ router.get("/:tableId", async (req, res) => {
           CustomerName as customerName,
           Pax as pax
         FROM TableMaster
-        WHERE TableId = @tableId
+        WHERE TableId = TRY_CAST(@tableId AS UNIQUEIDENTIFIER) OR CAST(TableNumber AS VARCHAR(50)) = @tableId
       `);
 
     if (result.recordset.length === 0) {

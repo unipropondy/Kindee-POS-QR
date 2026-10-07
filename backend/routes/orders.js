@@ -379,7 +379,7 @@ async function syncToProfessionalTables(
       DECLARE @Pax INT = NULL;
       DECLARE @CustomerName NVARCHAR(150) = NULL;
       IF @tableId IS NOT NULL 
-        SELECT TOP 1 @ActualTableNo = TableNumber, @Section = ISNULL(DiningSection, 4), @Pax = Pax, @CustomerName = CustomerName FROM TableMaster WHERE TableId = @tableId;
+        SELECT TOP 1 @ActualTableNo = TableNumber, @Section = ISNULL(DiningSection, 4), @Pax = Pax, @CustomerName = CustomerName FROM TableMaster WHERE TableNumber = @tableId OR (TRY_CAST(@tableId AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tableId AS UNIQUEIDENTIFIER));
 
       DECLARE @PriorityCode INT = NULL;
       IF @Section = 1 SET @PriorityCode = 1
@@ -1901,7 +1901,7 @@ router.post("/cancel", async (req, res) => {
         .request()
         .input("tid", sql.VarChar(50), cleanTid)
         .query(
-          "UPDATE TableMaster SET Status = 0, entry_status = NULL, TotalAmount = 0, StartTime = NULL, CurrentOrderId = NULL, CustomerName = NULL, Pax = NULL, ModifiedOn = GETDATE() WHERE TableId = @tid",
+          "UPDATE TableMaster SET Status = 0, entry_status = NULL, TotalAmount = 0, StartTime = NULL, CurrentOrderId = NULL, CustomerName = NULL, Pax = NULL, ModifiedOn = GETDATE() WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))",
         );
 
       await transaction.commit();
@@ -1933,12 +1933,12 @@ router.post("/complete", async (req, res) => {
     }
 
     // Final atomic update: Close the professional order and release the table
-    await pool.request().input("tid", sql.UniqueIdentifier, cleanId).query(`
+    await pool.request().input("tid", sql.VarChar(50), cleanId).query(`
         UPDATE RestaurantOrderCur SET isOrderClosed = 1, ModifiedOn = GETDATE() 
-        WHERE Tableno = (SELECT TOP 1 TableNumber FROM TableMaster WHERE TableId = @tid) 
+        WHERE (Tableno = (SELECT TOP 1 TableNumber FROM TableMaster WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))) OR Tableno = @tid) 
         AND (isOrderClosed = 0 OR isOrderClosed IS NULL);
         
-        UPDATE TableMaster SET Status = 0, entry_status = NULL, CurrentOrderId = NULL, StartTime = NULL, TotalAmount = 0, CustomerName = NULL, Pax = NULL, ModifiedOn = GETDATE() WHERE TableId = @tid;
+        UPDATE TableMaster SET Status = 0, entry_status = NULL, CurrentOrderId = NULL, StartTime = NULL, TotalAmount = 0, CustomerName = NULL, Pax = NULL, ModifiedOn = GETDATE() WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER));
       `);
 
     const updated = await syncTableStatus(req, cleanId);
@@ -1972,11 +1972,11 @@ router.post("/hold", async (req, res) => {
     const pool = await poolPromise;
 
     // Set status to 3 (Hold)
-    await pool.request().input("tid", sql.UniqueIdentifier, cleanId).query(`
+    await pool.request().input("tid", sql.VarChar(50), cleanId).query(`
         UPDATE TableMaster 
         SET Status = 3, 
             ModifiedOn = GETDATE() 
-        WHERE TableId = @tid
+        WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))
       `);
 
     const updated = await syncTableStatus(req, cleanId);
@@ -2590,7 +2590,7 @@ router.post("/merge", async (req, res) => {
         .request()
         .input("tid", sql.UniqueIdentifier, cleanTargetId)
         .query(
-          "SELECT TableNumber, CurrentOrderId FROM TableMaster WHERE TableId = @tid",
+          "SELECT TableNumber, CurrentOrderId FROM TableMaster WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))",
         );
 
       if (targetCheck.recordset.length === 0) {
@@ -2659,7 +2659,7 @@ router.post("/merge", async (req, res) => {
           .request()
           .input("tid", sql.UniqueIdentifier, cleanSourceId)
           .query(
-            "SELECT TableNumber, CurrentOrderId FROM TableMaster WHERE TableId = @tid",
+            "SELECT TableNumber, CurrentOrderId FROM TableMaster WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))",
           );
 
         if (sourceCheck.recordset.length === 0) {

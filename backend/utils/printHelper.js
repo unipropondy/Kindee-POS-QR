@@ -311,7 +311,7 @@ async function queueQRPrintJobs(pool, sql, opts) {
         `);
 
       if (printerRes.recordset.length > 0) {
-        printerIp   = printerRes.recordset[0].PrinterIP || printerRes.recordset[0].PrinterName || '';
+        printerIp   = printerRes.recordset[0].PrinterIP || '';
         printerName = printerRes.recordset[0].PrinterName || group.kitchenName;
       }
 
@@ -325,7 +325,7 @@ async function queueQRPrintJobs(pool, sql, opts) {
           WHERE PrinterType = 2 AND (IsActive = 1 OR IsActive IS NULL)
         `);
         if (fallbackKitchenRes.recordset.length > 0) {
-          printerIp   = fallbackKitchenRes.recordset[0].PrinterIP || fallbackKitchenRes.recordset[0].PrinterName || '';
+          printerIp   = fallbackKitchenRes.recordset[0].PrinterIP || '';
           printerName = fallbackKitchenRes.recordset[0].PrinterName || group.kitchenName;
         }
       }
@@ -340,7 +340,7 @@ async function queueQRPrintJobs(pool, sql, opts) {
           WHERE PrinterType = 1 AND (IsActive = 1 OR IsActive IS NULL)
         `);
         if (fallbackReceiptRes.recordset.length > 0) {
-          printerIp   = fallbackReceiptRes.recordset[0].PrinterIP || fallbackReceiptRes.recordset[0].PrinterName || '';
+          printerIp   = fallbackReceiptRes.recordset[0].PrinterIP || '';
           printerName = fallbackReceiptRes.recordset[0].PrinterName || 'Receipt Printer';
         }
       }
@@ -384,8 +384,8 @@ async function queueQRPrintJobs(pool, sql, opts) {
         WHERE PrinterType = 4 AND (IsActive = 1 OR IsActive IS NULL)
       `);
 
-    if (kdsRes.recordset.length > 0) {
-      kdsIp   = kdsRes.recordset[0].PrinterIP || kdsRes.recordset[0].PrinterName || 'KDS_PRINTER';
+    if (kdsRes.recordset.length > 0 && kdsRes.recordset[0].PrinterIP) {
+      kdsIp   = kdsRes.recordset[0].PrinterIP;
       kdsName = kdsRes.recordset[0].PrinterName || 'KDS Printer';
     } else {
       kdsIp   = 'KDS_PRINTER';
