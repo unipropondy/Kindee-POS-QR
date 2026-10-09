@@ -390,7 +390,7 @@ const LogoutButtonWeb = ({ onConfirm }: { onConfirm: () => void }) => {
 
 export default function CustomerMenuScreen() {
   const router = useRouter();
-  const { kitchens, allDishes, fetchMenu, fetchGroups, modifierCache, isLoading, forceRefreshMenu } = useMenuStore();
+  const { kitchens, allDishes, fetchMenu, fetchGroups, fetchDishes, dishesByGroup, modifierCache, isLoading, forceRefreshMenu } = useMenuStore();
   const { carts, currentContextId, addToCartGlobal } = useCartStore();
   const orderContext = useOrderContextStore((state) => state.currentOrder);
 
@@ -404,6 +404,9 @@ export default function CustomerMenuScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     await forceRefreshMenu();
+    if (selectedGroupId) {
+      await fetchDishes(selectedGroupId);
+    }
     setRefreshing(false);
   };
   const [isSessionClosed, setIsSessionClosed] = useState(false);
@@ -422,7 +425,6 @@ export default function CustomerMenuScreen() {
   const [showOrderHistorySection, setShowOrderHistorySection] = useState(false);
   const [showLoyaltySection, setShowLoyaltySection] = useState(false);
   const { settings: generalSettings, fetchSettings: fetchGeneralSettings } = useGeneralSettingsStore();
-
 
   useEffect(() => {
     fetchGeneralSettings();
@@ -627,6 +629,9 @@ export default function CustomerMenuScreen() {
     return true; // Show in QR menu
   };
 
+  // Helper to normalize and clean GUID/IDs for case and brace insensitive comparison
+  const cleanId = (id: any) => String(id || "").replace(/[{}]/g, "").trim().toLowerCase();
+
   // Load first published kitchen by default
   useEffect(() => {
     const published = kitchens.filter(k => isPublishedForQR(k.IsPublished));
@@ -650,6 +655,13 @@ export default function CustomerMenuScreen() {
     }
   }, [selectedKitchenId]);
 
+  // Fetch dishes directly for the selected group to ensure 100% complete data
+  useEffect(() => {
+    if (selectedGroupId) {
+      fetchDishes(selectedGroupId);
+    }
+  }, [selectedGroupId]);
+
   // 🔌 Real-time Socket Listener for Menu Updates (e.g. IsPublished toggle = 1 or 0)
   useEffect(() => {
     const { socket: sharedSocket } = require("../../constants/socket");
@@ -661,10 +673,13 @@ export default function CustomerMenuScreen() {
           fetchGroups(selectedKitchenId).then((groups) => {
             const publishedGroups = groups.filter(g => isPublishedForQR(g.IsPublished));
             setDishGroups(publishedGroups);
-            if (publishedGroups && publishedGroups.length > 0 && (!selectedGroupId || !publishedGroups.some(g => g.DishGroupId === selectedGroupId))) {
+            if (publishedGroups && publishedGroups.length > 0 && (!selectedGroupId || !publishedGroups.some(g => cleanId(g.DishGroupId) === cleanId(selectedGroupId)))) {
               setSelectedGroupId(publishedGroups[0].DishGroupId);
             }
           });
+        }
+        if (selectedGroupId) {
+          fetchDishes(selectedGroupId);
         }
       });
     };
@@ -721,13 +736,29 @@ export default function CustomerMenuScreen() {
     return () => clearInterval(timer);
   }, []);
 
-  const filteredDishes = allDishes.filter((dish: any) => {
-    const isPub = dish.IsPublished !== undefined ? dish.IsPublished : dish.isPublished;
-    const catPub = dish.CategoryPublished !== undefined ? dish.CategoryPublished : dish.categoryPublished;
-    const grpPub = dish.GroupPublished !== undefined ? dish.GroupPublished : dish.groupPublished;
+  // Combine allDishes with group-specific dishes from store
+  const groupSpecificDishes = selectedGroupId && dishesByGroup[selectedGroupId] ? dishesByGroup[selectedGroupId] : [];
+  
+  const combinedMap = new Map<string, any>();
+  allDishes.forEach((d: any) => {
+    const id = cleanId(d.DishId || d.id);
+    if (id) combinedMap.set(id, d);
+  });
+  groupSpecificDishes.forEach((d: any) => {
+    const id = cleanId(d.DishId || d.id);
+    if (id) {
+      const existing = combinedMap.get(id);
+      combinedMap.set(id, existing ? { ...existing, ...d } : d);
+    }
+  });
 
-    // Exclude if IsPublished = 1 on Dish, Category, or Group level
-    if (!isPublishedForQR(isPub) || !isPublishedForQR(catPub) || !isPublishedForQR(grpPub)) {
+  const combinedDishesList = Array.from(combinedMap.values());
+
+  const filteredDishes = combinedDishesList.filter((dish: any) => {
+    const isPub = dish.IsPublished !== undefined ? dish.IsPublished : dish.isPublished;
+
+    // Exclude if IsPublished = 1 on Dish level (1 = unpublished/hidden in QR menu)
+    if (!isPublishedForQR(isPub)) {
       return false;
     }
 
@@ -745,13 +776,17 @@ export default function CustomerMenuScreen() {
       return nameMatch || descMatch;
     }
     
-    // Check if dish matches group (either primary DishGroupId or via DishGroupMapping)
+    // Check if dish matches group (either primary DishGroupId or via DishGroupMapping or group API)
     const matchesDishGroupId = (groupId: string) => {
       if (!groupId) return false;
-      if (dish.DishGroupId === groupId) return true;
+      const targetGId = cleanId(groupId);
+      if (cleanId(dish.DishGroupId) === targetGId) return true;
       if (dish.MappedGroupIds) {
-        const mappedArr = String(dish.MappedGroupIds).split(',').map(s => s.trim()).filter(Boolean);
-        return mappedArr.includes(groupId);
+        const mappedArr = String(dish.MappedGroupIds).split(',').map(s => cleanId(s)).filter(Boolean);
+        if (mappedArr.includes(targetGId)) return true;
+      }
+      if (selectedGroupId && cleanId(selectedGroupId) === targetGId && groupSpecificDishes.some(gd => cleanId(gd.DishId || gd.id) === cleanId(dish.DishId || dish.id))) {
+        return true;
       }
       return false;
     };
