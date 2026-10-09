@@ -632,52 +632,43 @@ export default function CustomerMenuScreen() {
   // Helper to normalize and clean GUID/IDs for case and brace insensitive comparison
   const cleanId = (id: any) => String(id || "").replace(/[{}]/g, "").trim().toLowerCase();
 
-  // Load first published kitchen by default
+  // 🟢 Synchronize kitchen selection, dish groups, and active group whenever kitchens or selectedKitchenId updates
   useEffect(() => {
     const published = kitchens.filter(k => isPublishedForQR(k.IsPublished));
-    if (published.length > 0 && !selectedKitchenId) {
-      const firstCatId = published[0].CategoryId;
-      setSelectedKitchenId(firstCatId);
+    if (published.length === 0) return;
 
-      // 🟢 Immediate synchronous pre-population of groups & group selection
-      const storeGroups = useMenuStore.getState().dishGroups[firstCatId] || [];
-      const publishedGroups = storeGroups.filter(g => isPublishedForQR(g.IsPublished));
-      setDishGroups(publishedGroups);
-      if (publishedGroups.length > 0) {
-        setSelectedGroupId(publishedGroups[0].DishGroupId);
-      }
+    let targetKitchenId: string | null = selectedKitchenId;
+    if (!targetKitchenId || !published.some(k => k.CategoryId === targetKitchenId)) {
+      targetKitchenId = published[0].CategoryId;
+      setSelectedKitchenId(targetKitchenId);
     }
-  }, [kitchens]);
 
-  // Load groups for the selected Category
-  useEffect(() => {
-    if (selectedKitchenId) {
-      // 🟢 Immediate synchronous retrieval from pre-populated store
-      const storeGroups = useMenuStore.getState().dishGroups[selectedKitchenId];
-      if (storeGroups && storeGroups.length > 0) {
-        const publishedGroups = storeGroups.filter(g => isPublishedForQR(g.IsPublished));
-        setDishGroups(publishedGroups);
-        setSelectedGroupId((currentGId) => {
-          if (currentGId && publishedGroups.some(g => cleanId(g.DishGroupId) === cleanId(currentGId))) {
-            return currentGId;
-          }
-          return publishedGroups.length > 0 ? publishedGroups[0].DishGroupId : null;
-        });
+    if (!targetKitchenId) return;
+
+    // 🟢 1. Synchronously populate dish groups and selected group from store
+    const storeGroups = useMenuStore.getState().dishGroups[targetKitchenId] || [];
+    const publishedGroups = storeGroups.filter((g: any) => isPublishedForQR(g.IsPublished));
+    setDishGroups(publishedGroups);
+
+    setSelectedGroupId((currentGId) => {
+      if (currentGId && publishedGroups.some((g: any) => cleanId(g.DishGroupId) === cleanId(currentGId))) {
+        return currentGId;
       }
+      return publishedGroups.length > 0 ? publishedGroups[0].DishGroupId : null;
+    });
 
-      fetchGroups(selectedKitchenId).then((groups) => {
-        const publishedGroups = groups.filter(g => isPublishedForQR(g.IsPublished));
-        setDishGroups(publishedGroups);
-        
-        setSelectedGroupId((currentGId) => {
-          if (currentGId && publishedGroups.some(g => cleanId(g.DishGroupId) === cleanId(currentGId))) {
-            return currentGId; // Preserve user's active selection!
-          }
-          return publishedGroups.length > 0 ? publishedGroups[0].DishGroupId : null;
-        });
+    // 🟢 2. Async backup fetch to ensure full sync
+    fetchGroups(targetKitchenId).then((groups: any[]) => {
+      const pubGroups = groups.filter((g: any) => isPublishedForQR(g.IsPublished));
+      setDishGroups(pubGroups);
+      setSelectedGroupId((currentGId) => {
+        if (currentGId && pubGroups.some((g: any) => cleanId(g.DishGroupId) === cleanId(currentGId))) {
+          return currentGId;
+        }
+        return pubGroups.length > 0 ? pubGroups[0].DishGroupId : null;
       });
-    }
-  }, [selectedKitchenId]);
+    });
+  }, [kitchens, selectedKitchenId]);
 
   // Fetch dishes directly for the selected group to ensure 100% complete data
   useEffect(() => {
