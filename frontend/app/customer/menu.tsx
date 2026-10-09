@@ -543,7 +543,7 @@ export default function CustomerMenuScreen() {
   const cartSlideAnim = useRef(new Animated.Value(100)).current;
 
   useEffect(() => {
-    fetchMenu();
+    fetchMenu(true);
     // Inject hover styles for Web/customer menu
     if (Platform.OS === 'web') {
       const styleId = "customer-hover-styles";

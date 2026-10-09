@@ -37,23 +37,27 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 
     set({ isLoading: true });
     try {
-      // 1. Fetch kitchens
-      const kRes = await fetch(`${API_URL}/api/menu/kitchens`);
-      const kData = await kRes.json();
+      // 🚀 PARALLEL FETCH: Load kitchens and all dishes concurrently for maximum speed
+      const [kRes, dRes] = await Promise.all([
+        fetch(`${API_URL}/api/menu/kitchens`),
+        fetch(`${API_URL}/api/menu/dishes/all`)
+      ]);
+
+      const [kData, dData] = await Promise.all([
+        kRes.json(),
+        dRes.json()
+      ]);
+
       const rawKitchens = Array.isArray(kData) ? kData.filter((k: any) => k.KitchenTypeName && !k.KitchenTypeName.includes("TEST")) : [];
-      // 🟢 Deduplicate kitchens by CategoryId (since backend returns CategoryId)
+      // 🟢 Deduplicate kitchens by CategoryId
       const kitchensData = Array.from(
         new Map(rawKitchens.map((k: any) => [k.CategoryId, k])).values()
       );
 
-      // 2. Fetch all dishes (for search)
-      const dRes = await fetch(`${API_URL}/api/menu/dishes/all`);
-      const dData = await dRes.json();
       const allDishesRaw = Array.isArray(dData) ? dData : [];
-      
-      // Deduplicate dishes by DishId
+      // Deduplicate & clean dishes by normalized DishId
       const allDishesData = Array.from(
-        new Map(allDishesRaw.map((d: any) => [d.DishId || d.id, d])).values()
+        new Map(allDishesRaw.map((d: any) => [String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase(), d])).values()
       );
 
       set({ 
