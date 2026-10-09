@@ -5,7 +5,7 @@ const sharp = require("sharp");
 
 // 🚀 PERFORMANCE CACHE
 const cache = new Map();
-const CACHE_TTL = 300000; // 5 minutes
+const CACHE_TTL = 30000; // 30 seconds for dynamic responsiveness
 
 function getCached(key) {
   const item = cache.get(key);
@@ -184,6 +184,12 @@ router.get("/dishes/group/:DishGroupId", async (req, res) => {
               ISNULL(d.TakeawayCharge, 0) AS takeawayCharge,
               ISNULL(cat.IsPublished, 0) AS CategoryPublished,
               ISNULL(dgm.IsPublished, 0) AS GroupPublished,
+              ISNULL((
+                SELECT CAST(dmap.DishGroupId AS VARCHAR(50)) + ','
+                FROM DishGroupMapping dmap
+                WHERE dmap.DishId = d.DishId
+                FOR XML PATH('')
+              ), '') AS MappedGroupIds,
               (SELECT COUNT(1) FROM DishModifier dm WHERE dm.DishId = d.DishId) AS HasModifiers,
               CAST(ISNULL(d.IsDiscountAllowed, 1) AS INT) AS IsDiscountAllowed,
               ISNULL(ckt.KitchenTypeCode, '2') AS KitchenTypeCode,

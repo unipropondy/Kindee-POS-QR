@@ -13,7 +13,7 @@ interface MenuState {
 
   fetchMenu: (force?: boolean) => Promise<void>;
   fetchGroups: (kitchenId: string) => Promise<any[]>;
-  fetchDishes: (groupId: string) => Promise<any[]>;
+  fetchDishes: (groupId: string, force?: boolean) => Promise<any[]>;
   fetchModifiersForGroup: (groupId: string) => Promise<void>;
   clearCache: () => void;
   forceRefreshMenu: () => Promise<void>;
@@ -91,9 +91,9 @@ export const useMenuStore = create<MenuState>((set, get) => ({
     }
   },
 
-  fetchDishes: async (groupId) => {
+  fetchDishes: async (groupId, force = false) => {
     const { dishesByGroup, modifierCache } = get();
-    if (dishesByGroup[groupId]) {
+    if (!force && dishesByGroup[groupId]) {
       const groupDishes = dishesByGroup[groupId];
       const hasAnyModifierCached = groupDishes.some(d => modifierCache[d.DishId || d.id] !== undefined);
       if (!hasAnyModifierCached) {

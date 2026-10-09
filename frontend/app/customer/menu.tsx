@@ -405,7 +405,7 @@ export default function CustomerMenuScreen() {
     setRefreshing(true);
     await forceRefreshMenu();
     if (selectedGroupId) {
-      await fetchDishes(selectedGroupId);
+      await fetchDishes(selectedGroupId, true);
     }
     setRefreshing(false);
   };
