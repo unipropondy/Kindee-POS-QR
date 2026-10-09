@@ -645,16 +645,13 @@ export default function CustomerMenuScreen() {
     if (selectedKitchenId) {
       fetchGroups(selectedKitchenId).then((groups) => {
         const publishedGroups = groups.filter(g => isPublishedForQR(g.IsPublished));
-        // Add "All" option at beginning of groups
-        const allGroup = { DishGroupId: "ALL", DishGroupName: "All", IsPublished: 0 };
-        const fullGroupsList = publishedGroups.length > 0 ? [allGroup, ...publishedGroups] : [];
-        setDishGroups(fullGroupsList);
+        setDishGroups(publishedGroups);
         
         setSelectedGroupId((currentGId) => {
-          if (currentGId && fullGroupsList.some(g => cleanId(g.DishGroupId) === cleanId(currentGId))) {
+          if (currentGId && publishedGroups.some(g => cleanId(g.DishGroupId) === cleanId(currentGId))) {
             return currentGId; // Preserve user's active selection!
           }
-          return fullGroupsList.length > 0 ? fullGroupsList[0].DishGroupId : null;
+          return publishedGroups.length > 0 ? publishedGroups[0].DishGroupId : null;
         });
       });
     }
@@ -662,7 +659,7 @@ export default function CustomerMenuScreen() {
 
   // Fetch dishes directly for the selected group to ensure 100% complete data
   useEffect(() => {
-    if (selectedGroupId && selectedGroupId !== "ALL") {
+    if (selectedGroupId) {
       fetchDishes(selectedGroupId);
     }
   }, [selectedGroupId]);
@@ -677,18 +674,16 @@ export default function CustomerMenuScreen() {
         if (selectedKitchenId) {
           fetchGroups(selectedKitchenId).then((groups) => {
             const publishedGroups = groups.filter(g => isPublishedForQR(g.IsPublished));
-            const allGroup = { DishGroupId: "ALL", DishGroupName: "All", IsPublished: 0 };
-            const fullGroupsList = publishedGroups.length > 0 ? [allGroup, ...publishedGroups] : [];
-            setDishGroups(fullGroupsList);
+            setDishGroups(publishedGroups);
             setSelectedGroupId((currentGId) => {
-              if (currentGId && fullGroupsList.some(g => cleanId(g.DishGroupId) === cleanId(currentGId))) {
+              if (currentGId && publishedGroups.some(g => cleanId(g.DishGroupId) === cleanId(currentGId))) {
                 return currentGId; // Preserve active selection!
               }
-              return fullGroupsList.length > 0 ? fullGroupsList[0].DishGroupId : null;
+              return publishedGroups.length > 0 ? publishedGroups[0].DishGroupId : null;
             });
           });
         }
-        if (selectedGroupId && selectedGroupId !== "ALL") {
+        if (selectedGroupId) {
           fetchDishes(selectedGroupId, true);
         }
       });
@@ -788,7 +783,7 @@ export default function CustomerMenuScreen() {
     
     // Check if dish matches group (either primary DishGroupId or via DishGroupMapping or group API)
     const matchesDishGroupId = (groupId: string) => {
-      if (!groupId || groupId === "ALL") return false;
+      if (!groupId) return false;
       const targetGId = cleanId(groupId);
       if (cleanId(dish.DishGroupId) === targetGId) return true;
       if (dish.MappedGroupIds) {
@@ -802,10 +797,10 @@ export default function CustomerMenuScreen() {
     };
 
     // Check if the dish belongs to any group in the currently selected category
-    const belongsToCategory = dishGroups.some(g => g.DishGroupId !== "ALL" && matchesDishGroupId(g.DishGroupId));
+    const belongsToCategory = dishGroups.some(g => matchesDishGroupId(g.DishGroupId));
     
-    // If a specific group is selected, match it; otherwise show all dishes belonging to the category
-    const matchesGroup = (selectedGroupId && selectedGroupId !== "ALL")
+    // If a group is selected, match it; otherwise ensure it belongs to the selected category
+    const matchesGroup = selectedGroupId
       ? matchesDishGroupId(selectedGroupId)
       : belongsToCategory;
       
