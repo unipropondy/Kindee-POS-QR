@@ -195,13 +195,14 @@ async function pollMenuPublishStatus() {
     if (pool && pool.connected) {
       const result = await pool.request().query(`
         SELECT 
-          (SELECT CHECKSUM_AGG(CHECKSUM(DishId, ISNULL(IsPublished, 0))) FROM DishMaster WITH (NOLOCK)) AS dishHash,
-          (SELECT CHECKSUM_AGG(CHECKSUM(CategoryId, ISNULL(IsPublished, 0))) FROM CategoryMaster WITH (NOLOCK)) AS catHash,
-          (SELECT CHECKSUM_AGG(CHECKSUM(DishGroupId, ISNULL(IsPublished, 0))) FROM DishGroupMaster WITH (NOLOCK)) AS groupHash
+          (SELECT COUNT(1) FROM DishMaster WHERE IsPublished = 1 OR IsPublished = 'true') AS hiddenDishes,
+          (SELECT COUNT(1) FROM CategoryMaster WHERE IsPublished = 1 OR IsPublished = 'true') AS hiddenCats,
+          (SELECT COUNT(1) FROM DishGroupMaster WHERE IsPublished = 1 OR IsPublished = 'true') AS hiddenGroups,
+          (SELECT COUNT(1) FROM DishMaster WHERE IsActive = 1) AS activeDishes
       `);
 
       const row = result.recordset[0];
-      const currentHash = `${row?.dishHash}_${row?.catHash}_${row?.groupHash}`;
+      const currentHash = `${row?.hiddenDishes}_${row?.hiddenCats}_${row?.hiddenGroups}_${row?.activeDishes}`;
 
       if (previousMenuPublishHash !== null && previousMenuPublishHash !== currentHash) {
         console.log(`🔌 [DB Poller Sync] Menu IsPublished change detected! Clearing menu cache & emitting menu_updated...`);
@@ -217,7 +218,7 @@ async function pollMenuPublishStatus() {
   } catch (err) {
     console.error("🔄 [DB Poller Menu] Error:", err.message);
   } finally {
-    setTimeout(pollMenuPublishStatus, 3000);
+    setTimeout(pollMenuPublishStatus, 5000);
   }
 }
 
