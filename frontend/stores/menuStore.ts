@@ -37,14 +37,16 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 
     set({ isLoading: true });
     try {
-      // 🚀 PARALLEL FETCH: Load kitchens and all dishes concurrently for maximum speed
-      const [kRes, dRes] = await Promise.all([
+      // 🚀 PARALLEL ATOMIC FETCH: Load kitchens, all dish groups, and all dishes concurrently
+      const [kRes, gRes, dRes] = await Promise.all([
         fetch(`${API_URL}/api/menu/kitchens`),
+        fetch(`${API_URL}/api/menu/dishgroups/all`),
         fetch(`${API_URL}/api/menu/dishes/all`)
       ]);
 
-      const [kData, dData] = await Promise.all([
+      const [kData, gData, dData] = await Promise.all([
         kRes.json(),
+        gRes.json(),
         dRes.json()
       ]);
 
@@ -60,12 +62,47 @@ export const useMenuStore = create<MenuState>((set, get) => ({
         new Map(allDishesRaw.map((d: any) => [String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase(), d])).values()
       );
 
-      set({ 
-        kitchens: kitchensData, 
+      // 🟢 Build dishGroups map grouped by CategoryId
+      const groupsRaw = Array.isArray(gData) ? gData : [];
+      const dishGroupsMap: Record<string, any[]> = {};
+      groupsRaw.forEach((g: any) => {
+        const catId = g.CategoryId;
+        if (catId) {
+          if (!dishGroupsMap[catId]) dishGroupsMap[catId] = [];
+          if (!dishGroupsMap[catId].some((existing: any) => existing.DishGroupId === g.DishGroupId)) {
+            dishGroupsMap[catId].push(g);
+          }
+        }
+      });
+
+      // 🟢 Build dishesByGroup map for ALL groups directly from allDishesData
+      const dishesByGroupMap: Record<string, any[]> = {};
+      const cleanId = (id: any) => String(id || "").replace(/[{}]/g, "").trim().toLowerCase();
+
+      groupsRaw.forEach((g: any) => {
+        const targetGId = cleanId(g.DishGroupId);
+        if (!targetGId) return;
+
+        const groupDishes = allDishesData.filter((d: any) => {
+          if (cleanId(d.DishGroupId) === targetGId) return true;
+          if (d.MappedGroupIds) {
+            const mappedArr = String(d.MappedGroupIds).split(",").map(s => cleanId(s)).filter(Boolean);
+            if (mappedArr.includes(targetGId)) return true;
+          }
+          return false;
+        });
+
+        dishesByGroupMap[g.DishGroupId] = groupDishes;
+      });
+
+      set((state) => ({ 
+        kitchens: kitchensData,
+        dishGroups: { ...state.dishGroups, ...dishGroupsMap },
+        dishesByGroup: { ...state.dishesByGroup, ...dishesByGroupMap },
         allDishes: allDishesData,
         lastFetched: Date.now(),
         isLoading: false 
-      });
+      }));
     } catch (error) {
       console.error("Failed to fetch menu:", error);
       set({ isLoading: false });

@@ -52,13 +52,19 @@ router.get("/dishgroups/all", async (req, res) => {
 
     const pool = await poolPromise;
     const result = await pool.request().query(`
-      SELECT 
-        DishGroupId,
-        DishGroupName,
-        ISNULL(IsPublished, 0) AS IsPublished
-      FROM DishGroupMaster
-      WHERE IsActive = 1
-      ORDER BY DishGroupName ASC
+      SELECT DISTINCT
+        a.DishGroupId,
+        a.DishGroupName,
+        ISNULL(a.SortCode, 0) AS SortCode,
+        ISNULL(a.IsPublished, 0) AS IsPublished,
+        ISNULL(a.CategoryId, cm.CategoryId) AS CategoryId
+      FROM DishGroupMaster a
+      LEFT JOIN DishGroupKitchentype dkt
+        ON a.DishGroupId = dkt.DishGroupId
+      LEFT JOIN CategoryMaster cm
+        ON (a.CategoryId = cm.CategoryId OR dkt.KitchenTypeName = cm.CategoryName)
+      WHERE a.IsActive = 1 AND ISNULL(a.CategoryId, cm.CategoryId) IS NOT NULL
+      ORDER BY ISNULL(a.SortCode, 0) ASC, a.DishGroupName ASC
     `);
     setCache(cacheKey, result.recordset);
     res.json(result.recordset || []);

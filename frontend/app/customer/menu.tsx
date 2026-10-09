@@ -636,13 +636,35 @@ export default function CustomerMenuScreen() {
   useEffect(() => {
     const published = kitchens.filter(k => isPublishedForQR(k.IsPublished));
     if (published.length > 0 && !selectedKitchenId) {
-      setSelectedKitchenId(published[0].CategoryId);
+      const firstCatId = published[0].CategoryId;
+      setSelectedKitchenId(firstCatId);
+
+      // 🟢 Immediate synchronous pre-population of groups & group selection
+      const storeGroups = useMenuStore.getState().dishGroups[firstCatId] || [];
+      const publishedGroups = storeGroups.filter(g => isPublishedForQR(g.IsPublished));
+      setDishGroups(publishedGroups);
+      if (publishedGroups.length > 0) {
+        setSelectedGroupId(publishedGroups[0].DishGroupId);
+      }
     }
   }, [kitchens]);
 
   // Load groups for the selected Category
   useEffect(() => {
     if (selectedKitchenId) {
+      // 🟢 Immediate synchronous retrieval from pre-populated store
+      const storeGroups = useMenuStore.getState().dishGroups[selectedKitchenId];
+      if (storeGroups && storeGroups.length > 0) {
+        const publishedGroups = storeGroups.filter(g => isPublishedForQR(g.IsPublished));
+        setDishGroups(publishedGroups);
+        setSelectedGroupId((currentGId) => {
+          if (currentGId && publishedGroups.some(g => cleanId(g.DishGroupId) === cleanId(currentGId))) {
+            return currentGId;
+          }
+          return publishedGroups.length > 0 ? publishedGroups[0].DishGroupId : null;
+        });
+      }
+
       fetchGroups(selectedKitchenId).then((groups) => {
         const publishedGroups = groups.filter(g => isPublishedForQR(g.IsPublished));
         setDishGroups(publishedGroups);
