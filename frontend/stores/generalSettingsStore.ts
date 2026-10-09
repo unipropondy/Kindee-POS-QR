@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_URL } from "../constants/Config";
+import { useAuthStore } from "./authStore";
 
 export interface GeneralSettings {
   enableKOT: boolean;
@@ -15,6 +16,7 @@ export interface GeneralSettings {
   SVCIdentification: boolean;
   enableKDSPrint: boolean;
   enableCombo: boolean;
+  enableQuickServe: boolean;
   showLoyalty: boolean;
   showRewardPoints: boolean;
   showPromoCode: boolean;
@@ -34,7 +36,7 @@ interface GeneralSettingsState {
   settings: GeneralSettings;
   loading: boolean;
   fetchSettings: () => Promise<void>;
-  updateSettings: (newSettings: Partial<GeneralSettings>) => Promise<boolean>;
+  updateSettings: (newSettings: Partial<GeneralSettings>, userInfo?: { userName?: string; userId?: string; userRole?: string }) => Promise<boolean>;
 }
 
 export const useGeneralSettingsStore = create<GeneralSettingsState>()(
@@ -52,6 +54,7 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
         SVCIdentification: true,
         enableKDSPrint: true,
         enableCombo: true,
+        enableQuickServe: true,
         showLoyalty: true,
         showRewardPoints: true,
         showPromoCode: true,
@@ -89,6 +92,7 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
                 SVCIdentification: data.SVCIdentification !== undefined ? Boolean(data.SVCIdentification) : true,
                 enableKDSPrint: data.EnableKDSPrint !== undefined ? Boolean(data.EnableKDSPrint) : true,
                 enableCombo: data.EnableCombo !== undefined ? Boolean(data.EnableCombo) : true,
+                enableQuickServe: data.EnableQuickServe !== undefined ? Boolean(data.EnableQuickServe) : true,
                 showLoyalty: data.ShowLoyalty !== undefined ? Boolean(data.ShowLoyalty) : true,
                 showRewardPoints: data.ShowRewardPoints !== undefined ? Boolean(data.ShowRewardPoints) : true,
                 showPromoCode: data.ShowPromoCode !== undefined ? Boolean(data.ShowPromoCode) : true,
@@ -112,7 +116,7 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
         }
       },
 
-      updateSettings: async (newSettings) => {
+      updateSettings: async (newSettings, userInfo?: { userName?: string; userId?: string; userRole?: string }) => {
         const previousSettings = get().settings;
         const updatedSettings = { ...previousSettings, ...newSettings };
         
@@ -139,6 +143,7 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
             SVCIdentification: updatedSettings.SVCIdentification,
             enableKDSPrint: updatedSettings.enableKDSPrint,
             enableCombo: updatedSettings.enableCombo,
+            enableQuickServe: updatedSettings.enableQuickServe,
             showLoyalty: updatedSettings.showLoyalty,
             showRewardPoints: updatedSettings.showRewardPoints,
             showPromoCode: updatedSettings.showPromoCode,
@@ -152,6 +157,9 @@ export const useGeneralSettingsStore = create<GeneralSettingsState>()(
             enableReceiptPrint: updatedSettings.enableReceiptPrint,
             enableVoiceSuccess: updatedSettings.enableVoiceSuccess,
             enableNotificationSound: updatedSettings.enableNotificationSound,
+            userName: userInfo?.userName || useAuthStore.getState().user?.userName || useAuthStore.getState().user?.fullName || "",
+            userId: userInfo?.userId || useAuthStore.getState().user?.userId || "",
+            userRole: userInfo?.userRole || useAuthStore.getState().user?.roleName || useAuthStore.getState().user?.role || ""
           };
 
           const res = await fetch(`${API_URL}/api/settings/update`, {

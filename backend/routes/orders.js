@@ -368,6 +368,9 @@ async function syncToProfessionalTables(
   const serviceChargePercentage = companySettings
     ? Number(companySettings.ServiceChargePercentage || 0)
     : 0;
+  const twServiceChargePercentage = companySettings
+    ? Number(companySettings.TWServiceChargePercentage || 0)
+    : 0;
 
   // 🚀 OPTIMIZATION 1: Combined Initial Lookups (TableNo, BizId, OrderHeader)
   const initRes = await transaction
@@ -379,7 +382,7 @@ async function syncToProfessionalTables(
       DECLARE @Pax INT = NULL;
       DECLARE @CustomerName NVARCHAR(150) = NULL;
       IF @tableId IS NOT NULL 
-        SELECT TOP 1 @ActualTableNo = TableNumber, @Section = ISNULL(DiningSection, 4), @Pax = Pax, @CustomerName = CustomerName FROM TableMaster WHERE TableNumber = @tableId OR (TRY_CAST(@tableId AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tableId AS UNIQUEIDENTIFIER));
+        SELECT TOP 1 @ActualTableNo = TableNumber, @Section = ISNULL(DiningSection, 4), @Pax = Pax, @CustomerName = CustomerName FROM TableMaster WHERE TableId = @tableId;
 
       DECLARE @PriorityCode INT = NULL;
       IF @Section = 1 SET @PriorityCode = 1
@@ -646,20 +649,25 @@ async function syncToProfessionalTables(
 
       const isSC = !isTWItem && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true || Number(item.IsServiceCharge) === 1 || item.IsServiceCharge === true);
       let itemSC = null;
-      if (isSC) {
-        const qtyVal = Number(item.qty || 1);
-        const priceVal = Number(unitPrice || 0);
-        const discVal = Number(item.discount || 0);
-        let itemDiscount = 0;
-        if (discVal > 0) {
-          const discountBasis = isCombo ? Number(item.basePrice || priceVal) : priceVal;
-          if (resolvedDiscountType === "percentage") {
-            itemDiscount = discountBasis * qtyVal * (discVal / 100);
-          } else {
-            itemDiscount = Math.min(discVal, discountBasis) * qtyVal;
-          }
+      const qtyVal = Number(item.qty || 1);
+      const priceVal = Number(unitPrice || 0);
+      const discVal = Number(item.discount || 0);
+      let itemDiscount = 0;
+      if (discVal > 0) {
+        const discountBasis = isCombo ? Number(item.basePrice || priceVal) : priceVal;
+        if (resolvedDiscountType === "percentage") {
+          itemDiscount = discountBasis * qtyVal * (discVal / 100);
+        } else {
+          itemDiscount = Math.min(discVal, discountBasis) * qtyVal;
         }
-        const itemSubtotal = priceVal * qtyVal - itemDiscount;
+      }
+      const itemSubtotal = priceVal * qtyVal - itemDiscount;
+
+      if (isTWItem) {
+        if (twServiceChargePercentage > 0) {
+          itemSC = itemSubtotal * (twServiceChargePercentage / 100);
+        }
+      } else if (isSC) {
         itemSC = itemSubtotal * (serviceChargePercentage / 100);
       }
       itemRequest.input(p_sc, sql.Decimal(18, 2), itemSC);
@@ -1199,73 +1207,71 @@ router.post("/save-cart", async (req, res) => {
   }
 });
 
-function getNewlyAddedItems(sentItems = [], existingRows = []) {
-  if (!existingRows || existingRows.length === 0) {
-    return sentItems;
-  }
+// 🛡️ DUP-GUARD & LOCKING: In-memory lock & deduplication cache for /api/orders/send
+const activeSendLocks = new Map(); // tableKey -> Promise
+const recentSendCache = new Map(); // tableKey -> { timestamp, orderId, signature }
 
-  const existingLineIds = new Set(existingRows.map(r => String(r.lineItemId || '')).filter(Boolean));
-
-  const getDishSignature = (item) => {
-    const dishId = String(item.id || item.DishId || item.dishId || '').toLowerCase();
-    const name = String(item.name || item.DishName || '').toLowerCase().trim();
-    const note = String(item.note || item.notes || item.Remarks || item.remarks || '').toLowerCase().trim();
-
-    let mods = '';
-    if (item.modifiers && Array.isArray(item.modifiers)) {
-      mods = item.modifiers.map(m => String(m.ModifierId || m.id || m.name || m.ModifierName || '').toLowerCase()).sort().join(',');
-    } else if (item.ModifiersJSON) {
-      mods = typeof item.ModifiersJSON === 'string' ? item.ModifiersJSON : JSON.stringify(item.ModifiersJSON);
-    }
-
-    let combos = '';
-    if (item.comboSelections && Array.isArray(item.comboSelections)) {
-      combos = JSON.stringify(item.comboSelections);
-    } else if (item.ComboDetailsJSON) {
-      combos = typeof item.ComboDetailsJSON === 'string' ? item.ComboDetailsJSON : JSON.stringify(item.ComboDetailsJSON);
-    }
-
-    return `${dishId || name}_mod:${mods}_combo:${combos}_note:${note}`;
-  };
-
-  const existingSigQty = {};
-  existingRows.forEach(row => {
-    const sig = getDishSignature(row);
-    existingSigQty[sig] = (existingSigQty[sig] || 0) + (Number(row.qty || row.Quantity) || 1);
-  });
-
-  const newlyAdded = [];
-
-  sentItems.forEach(item => {
-    if (item.lineItemId && existingLineIds.has(String(item.lineItemId))) {
-      return;
-    }
-
-    const sig = getDishSignature(item);
-    const itemQty = Number(item.qty || item.quantity) || 1;
-    const existingQty = existingSigQty[sig] || 0;
-
-    if (existingQty <= 0) {
-      newlyAdded.push(item);
-    } else if (itemQty > existingQty) {
-      const delta = itemQty - existingQty;
-      newlyAdded.push({ ...item, qty: delta, quantity: delta });
-      existingSigQty[sig] = 0;
-    } else {
-      existingSigQty[sig] -= itemQty;
-    }
-  });
-
-  return newlyAdded;
+function generateItemsSignature(items) {
+  if (!items || !Array.isArray(items) || items.length === 0) return "";
+  return items
+    .map((item) => {
+      const id = item.id || item.DishId || item.lineItemId || "";
+      const qty = item.qty || item.Quantity || 1;
+      const mods = Array.isArray(item.modifiers) ? item.modifiers.map(m => m.ModifierId || m.name || m.modifierName || '').sort().join(',') : '';
+      return `${id}:${qty}:${mods}`;
+    })
+    .sort()
+    .join("|");
 }
 
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of recentSendCache.entries()) {
+    if (now - val.timestamp > 10000) {
+      recentSendCache.delete(key);
+    }
+  }
+}, 30000);
+
 router.post("/send", async (req, res) => {
+  let tableKey = "";
+  let resolveLock, rejectLock;
   try {
     const { tableId, orderId, items, userId, discountAmount, discountRemarks, mobileNo, customerName } = req.body;
     const pool = await poolPromise;
     const cleanId = await getCleanTableId(pool, tableId);
+    tableKey = String(cleanId).toLowerCase().trim();
+    const signature = generateItemsSignature(items);
 
-    let existingRowsBeforeSend = [];
+    // 🛡️ DEDUP CHECK 1: If exact same items were sent for this table within 5 seconds, block duplicate execution
+    const now = Date.now();
+    const recent = recentSendCache.get(tableKey);
+    if (recent && (now - recent.timestamp < 5000) && signature && recent.signature === signature) {
+      console.warn(`🛡️ [Send Guard] Blocked duplicate /send request for table "${cleanId}" (${now - recent.timestamp}ms ago). Returning OrderId: ${recent.orderId}`);
+      return res.json({ success: true, orderId: recent.orderId, duplicateBlocked: true });
+    }
+
+    // 🛡️ CONCURRENCY LOCK 2: If another /send is currently in progress for this table, wait for it
+    if (activeSendLocks.has(tableKey)) {
+      console.warn(`🛡️ [Send Guard] Concurrent /send request for table "${cleanId}" detected. Waiting for in-flight send...`);
+      try {
+        await activeSendLocks.get(tableKey);
+        const postLockRecent = recentSendCache.get(tableKey);
+        if (postLockRecent && signature && postLockRecent.signature === signature) {
+          console.warn(`🛡️ [Send Guard] Post-lock duplicate request resolved for table "${cleanId}". Returning OrderId: ${postLockRecent.orderId}`);
+          return res.json({ success: true, orderId: postLockRecent.orderId, duplicateBlocked: true });
+        }
+      } catch (waitErr) {
+        // In-flight send failed, allow current send to proceed
+      }
+    }
+
+    const lockPromise = new Promise((resolve, reject) => {
+      resolveLock = resolve;
+      rejectLock = reject;
+    });
+    activeSendLocks.set(tableKey, lockPromise);
+
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
     try {
@@ -1343,6 +1349,7 @@ router.post("/send", async (req, res) => {
                 dish.DishId as id,
                 ISNULL(ckt.KitchenTypeCode, '2') as KitchenTypeCode, 
                 ISNULL(ISNULL(ckt.KitchenTypeName, cat.CategoryName), 'KITCHEN') as KitchenTypeName,
+                cat.CategoryName as CategoryName,
                 pm.PrinterPath as PrinterIP
               FROM DishMaster dish
               LEFT JOIN DishGroupMaster dgm ON dish.DishGroupId = dgm.DishGroupId
@@ -1365,6 +1372,7 @@ router.post("/send", async (req, res) => {
             if (kInfo) {
               item.KitchenTypeCode = kInfo.KitchenTypeCode;
               item.KitchenTypeName = kInfo.KitchenTypeName;
+              item.CategoryName = kInfo.CategoryName;
               item.PrinterIP = kInfo.PrinterIP;
             }
           });
@@ -1407,7 +1415,6 @@ router.post("/send", async (req, res) => {
           `);
 
         const existingRows = existingDbOrderItems.recordset || [];
-        existingRowsBeforeSend = existingRows;
         if (existingRows.length > 0) {
           const sentLineItemIds = new Set(sentItems.map((i) => i.lineItemId).filter(Boolean));
           existingRows.forEach((row) => {
@@ -1465,7 +1472,7 @@ router.post("/send", async (req, res) => {
         .input("paymentStatus", sql.Int, paymentStatus)
         .input("entryStatus", sql.NVarChar(10), isQROrder ? "q" : null).query(`
           UPDATE TableMaster 
-          SET Status = @status, 
+          SET Status = CASE WHEN Status = 2 THEN 2 ELSE @status END, 
               entry_status = @entryStatus,
               PAYMENT_STATUS = @paymentStatus,
               CurrentOrderId = @oid,
@@ -1485,24 +1492,26 @@ router.post("/send", async (req, res) => {
             .query("SELECT TableNumber FROM TableMaster WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))");
           const tableNo = tableQuery.recordset[0]?.TableNumber ? String(tableQuery.recordset[0].TableNumber).trim() : "";
 
-          const itemsToPrint = getNewlyAddedItems(sentItems, existingRowsBeforeSend);
-          const finalItemsToPrint = (itemsToPrint && itemsToPrint.length > 0) ? itemsToPrint : sentItems;
-          if (finalItemsToPrint.length > 0) {
-            await queueQRPrintJobs(pool, sql, {
-              orderId: finalOrderId,
-              tableNo,
-              sentItems: finalItemsToPrint,
-              isAdditional: isAdditionalOrder,
-            });
-            console.log(`[QR Print Queue] Queued KOT/KDS jobs for Order ${finalOrderId} Table ${tableNo} (${finalItemsToPrint.length} items)`);
-          } else {
-            console.log(`[QR Print Queue] Skipping print queue - no items for Order ${finalOrderId} Table ${tableNo}`);
-          }
+          await queueQRPrintJobs(pool, sql, {
+            orderId: finalOrderId,
+            tableNo,
+            sentItems,
+            isAdditional: isAdditionalOrder,
+          });
+          console.log(`[QR Print Queue] Queued KOT/KDS jobs for Order ${finalOrderId} Table ${tableNo}`);
         } catch (queueErr) {
           console.error("❌ Failed to queue QR KOT/KDS print jobs:", queueErr.message);
         }
       }
 
+      // Record successful send in cache
+      recentSendCache.set(tableKey, {
+        timestamp: Date.now(),
+        orderId: finalOrderId,
+        signature: signature,
+      });
+
+      if (resolveLock) resolveLock(finalOrderId);
       res.json({ success: true, orderId: finalOrderId });
 
       // 🔥 REAL-TIME BROADCAST: Notify KDS screen, POS APK, and all waiter devices.
@@ -1562,11 +1571,16 @@ router.post("/send", async (req, res) => {
       // 5. Refresh totals and notify instantly
       syncTableStatus(req, cleanId).catch(() => { });
     } catch (e) {
+      if (rejectLock) rejectLock(e);
       await transaction.rollback();
       console.error("❌ SendOrder SQL Error:", e.message);
       res.status(500).json({ error: "SEND_ERROR: " + e.message });
+    } finally {
+      if (tableKey) activeSendLocks.delete(tableKey);
     }
   } catch (err) {
+    if (rejectLock) rejectLock(err);
+    if (tableKey) activeSendLocks.delete(tableKey);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1901,7 +1915,7 @@ router.post("/cancel", async (req, res) => {
         .request()
         .input("tid", sql.VarChar(50), cleanTid)
         .query(
-          "UPDATE TableMaster SET Status = 0, entry_status = NULL, TotalAmount = 0, StartTime = NULL, CurrentOrderId = NULL, CustomerName = NULL, Pax = NULL, ModifiedOn = GETDATE() WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))",
+          "UPDATE TableMaster SET Status = 0, entry_status = NULL, TotalAmount = 0, StartTime = NULL, CurrentOrderId = NULL, CustomerName = NULL, Pax = NULL, ModifiedOn = GETDATE() WHERE TableId = @tid",
         );
 
       await transaction.commit();
@@ -1933,12 +1947,12 @@ router.post("/complete", async (req, res) => {
     }
 
     // Final atomic update: Close the professional order and release the table
-    await pool.request().input("tid", sql.VarChar(50), cleanId).query(`
+    await pool.request().input("tid", sql.UniqueIdentifier, cleanId).query(`
         UPDATE RestaurantOrderCur SET isOrderClosed = 1, ModifiedOn = GETDATE() 
-        WHERE (Tableno = (SELECT TOP 1 TableNumber FROM TableMaster WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))) OR Tableno = @tid) 
+        WHERE Tableno = (SELECT TOP 1 TableNumber FROM TableMaster WHERE TableId = @tid) 
         AND (isOrderClosed = 0 OR isOrderClosed IS NULL);
         
-        UPDATE TableMaster SET Status = 0, entry_status = NULL, CurrentOrderId = NULL, StartTime = NULL, TotalAmount = 0, CustomerName = NULL, Pax = NULL, ModifiedOn = GETDATE() WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER));
+        UPDATE TableMaster SET Status = 0, entry_status = NULL, CurrentOrderId = NULL, StartTime = NULL, TotalAmount = 0, CustomerName = NULL, Pax = NULL, ModifiedOn = GETDATE() WHERE TableId = @tid;
       `);
 
     const updated = await syncTableStatus(req, cleanId);
@@ -1972,11 +1986,11 @@ router.post("/hold", async (req, res) => {
     const pool = await poolPromise;
 
     // Set status to 3 (Hold)
-    await pool.request().input("tid", sql.VarChar(50), cleanId).query(`
+    await pool.request().input("tid", sql.UniqueIdentifier, cleanId).query(`
         UPDATE TableMaster 
         SET Status = 3, 
             ModifiedOn = GETDATE() 
-        WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))
+        WHERE TableId = @tid
       `);
 
     const updated = await syncTableStatus(req, cleanId);
@@ -2051,6 +2065,14 @@ router.post("/checkout", async (req, res) => {
     const io = req.app.get("io");
     if (io) {
       const lid = cleanId.toLowerCase();
+      io.emit("table_status_updated", {
+        tableId: lid,
+        tableNo: updated?.tableNo,
+        section: updated?.section,
+        status: 2,
+        totalAmount: updated?.TotalAmount,
+        startTime: updated?.StartTime
+      });
       io.emit("order_closed", {
         tableId: lid,
         tableNo: updated?.tableNo,
@@ -2590,7 +2612,7 @@ router.post("/merge", async (req, res) => {
         .request()
         .input("tid", sql.UniqueIdentifier, cleanTargetId)
         .query(
-          "SELECT TableNumber, CurrentOrderId FROM TableMaster WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))",
+          "SELECT TableNumber, CurrentOrderId FROM TableMaster WHERE TableId = @tid",
         );
 
       if (targetCheck.recordset.length === 0) {
@@ -2659,7 +2681,7 @@ router.post("/merge", async (req, res) => {
           .request()
           .input("tid", sql.UniqueIdentifier, cleanSourceId)
           .query(
-            "SELECT TableNumber, CurrentOrderId FROM TableMaster WHERE TableNumber = @tid OR (TRY_CAST(@tid AS UNIQUEIDENTIFIER) IS NOT NULL AND TableId = TRY_CAST(@tid AS UNIQUEIDENTIFIER))",
+            "SELECT TableNumber, CurrentOrderId FROM TableMaster WHERE TableId = @tid",
           );
 
         if (sourceCheck.recordset.length === 0) {

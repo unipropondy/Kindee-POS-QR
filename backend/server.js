@@ -165,6 +165,17 @@ io.on("connection", (socket) => {
     socket.broadcast.emit("terminal_split_rows_sync", data);
   });
 
+  // 🍽️ MENU PUBLISH & UPDATES SYNC: Broadcast menu published status changes to all QR menus and POS apps
+  socket.on("menu_updated", (data) => {
+    console.log("🍽️ [Server] Socket menu_updated event received:", data);
+    const menuRoute = require("./routes/menu");
+    if (menuRoute && typeof menuRoute.clearMenuCache === "function") {
+      menuRoute.clearMenuCache(io);
+    } else {
+      io.emit("menu_updated", data || {});
+    }
+  });
+
   socket.on("disconnect", () => {
     console.log("🔌 Client disconnected:", socket.id);
   });
@@ -175,6 +186,40 @@ console.log('🔐 [YeahPay] Sync URL:', config.syncApiUrl);
 // Only emits when changes are detected, preventing performance issues.
 const previousTablesState = new Map();
 const sectionMap = { "1": "SECTION_1", "2": "SECTION_2", "3": "SECTION_3", "4": "TAKEAWAY" };
+
+let previousMenuPublishHash = null;
+
+async function pollMenuPublishStatus() {
+  try {
+    const pool = await poolPromise;
+    if (pool && pool.connected) {
+      const result = await pool.request().query(`
+        SELECT 
+          (SELECT CHECKSUM_AGG(CHECKSUM(DishId, ISNULL(IsPublished, 0))) FROM DishMaster WITH (NOLOCK)) AS dishHash,
+          (SELECT CHECKSUM_AGG(CHECKSUM(CategoryId, ISNULL(IsPublished, 0))) FROM CategoryMaster WITH (NOLOCK)) AS catHash,
+          (SELECT CHECKSUM_AGG(CHECKSUM(DishGroupId, ISNULL(IsPublished, 0))) FROM DishGroupMaster WITH (NOLOCK)) AS groupHash
+      `);
+
+      const row = result.recordset[0];
+      const currentHash = `${row?.dishHash}_${row?.catHash}_${row?.groupHash}`;
+
+      if (previousMenuPublishHash !== null && previousMenuPublishHash !== currentHash) {
+        console.log(`🔌 [DB Poller Sync] Menu IsPublished change detected! Clearing menu cache & emitting menu_updated...`);
+        const menuRoute = require("./routes/menu");
+        if (menuRoute && typeof menuRoute.clearMenuCache === "function") {
+          menuRoute.clearMenuCache(io);
+        } else {
+          io.emit("menu_updated", { source: "db_poller", timestamp: Date.now() });
+        }
+      }
+      previousMenuPublishHash = currentHash;
+    }
+  } catch (err) {
+    console.error("🔄 [DB Poller Menu] Error:", err.message);
+  } finally {
+    setTimeout(pollMenuPublishStatus, 3000);
+  }
+}
 
 async function pollTables() {
   try {
@@ -269,8 +314,9 @@ async function pollTables() {
   }
 }
 
-// Start the poller
+// Start the pollers
 setTimeout(pollTables, 5000);
+setTimeout(pollMenuPublishStatus, 3000);
 
 // ✅ Global Middleware
 app.use((req, res, next) => {

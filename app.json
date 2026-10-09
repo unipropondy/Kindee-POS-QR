@@ -2,11 +2,11 @@
   "expo": {
     "name": "Smart POS",
     "slug": "pos-1",
-    "version": "4.0.0",
+    "version": "3.0.0",
     "orientation": "default",
     "android": {
       "package": "com.unipro.pos",
-      "versionCode": 4
+      "versionCode": 3
     },
     "extra": {
     },

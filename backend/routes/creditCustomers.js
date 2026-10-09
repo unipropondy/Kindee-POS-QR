@@ -316,9 +316,9 @@ router.post("/pay", async (req, res) => {
       .input("CreatedBy", sql.UniqueIdentifier, toGuidOrNull(userId))
       .input("StartDate", sql.Date, startDate)
       .query(`
-        INSERT INTO CustomerCreditTransactions (MemberId, TransactionType, BillAmount, PaidAmount, OutstandingAmount, PaymentMethod, ReferenceNo, Status, Remarks, CreatedBy, start_date)
+        INSERT INTO CustomerCreditTransactions (MemberId, TransactionType, BillAmount, PaidAmount, OutstandingAmount, PaymentMethod, ReferenceNo, Status, Remarks, CreatedBy, CustomerType, start_date)
         OUTPUT INSERTED.TransactionId
-        VALUES (@MemberId, 'PAYMENT', 0, @Amount, -@Amount, @PaymentMethod, @ReferenceNo, 'CLOSED', @Remarks, @CreatedBy, @StartDate)
+        VALUES (@MemberId, 'PAYMENT', 0, @Amount, -@Amount, @PaymentMethod, @ReferenceNo, 'CLOSED', @Remarks, @CreatedBy, 'CREDIT', @StartDate)
       `);
     
     paymentTransactionId = payTxResult.recordset[0].TransactionId;

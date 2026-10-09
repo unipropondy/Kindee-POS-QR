@@ -396,12 +396,16 @@ export default function PaymentSuccess() {
             <Ionicons name="checkmark-circle" size={80} color={Theme.success} />
           </View>
 
-          <Text style={styles.title}>{params.isLedgerCollection === "true" ? "Member Payment Collected" : "Payment Successful"}</Text>
+          <Text style={styles.title}>
+            {params.isLedgerCollection === "true" 
+              ? (params.isMember === "true" ? "Member Payment Collected" : "Credit Payment Collected") 
+              : "Payment Successful"}
+          </Text>
           <Text style={styles.orderText}>{params.isLedgerCollection === "true" ? `Settlement ID: ${orderId}` : `Order #${orderId}`}</Text>
 
           <Text style={styles.sub}>
             {params.isLedgerCollection === "true"
-              ? `Member Account Settlement`
+              ? (params.isMember === "true" ? "Member Account Settlement" : "Credit Customer Account Settlement")
               : (orderType === "DINE_IN"
                 ? `Table ${tableNo} • ${formatSection(section)}`
                 : `Takeaway • ${formatSection(section)}`)}

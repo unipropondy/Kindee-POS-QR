@@ -42,7 +42,7 @@ interface Terminal {
 export default function TerminalManagementScreen() {
   const router = useRouter();
   const { showToast } = useToast();
-  const currentTerminalCode = useTerminalStore((s) => s.terminalCode);
+  const currentTerminalCode = useTerminalStore((s: any) => s.terminalCode);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

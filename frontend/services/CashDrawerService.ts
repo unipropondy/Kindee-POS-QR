@@ -119,24 +119,43 @@ export default class CashDrawerService {
     }
 
     if (!printerIp || printerIp.trim() === '') {
-      console.warn('[CashDrawer] No printer IP configured for TCP fallback');
+      console.warn('[CashDrawer] No printer IP or MAC Address configured for fallback');
       return false;
     }
-    try {
-      // RJ11 command via TCP
-      await ThermalPrinter.printTcp({
-        ip: printerIp.trim(),
-        port: 9100,
-        payload: '\x1B\x70\x00\x19\x19',
-        openCashbox: true,
-        mmFeedPaper: 0,
-        autoCut: false,
-      });
-      console.log(`✅ [CashDrawer] Open command successfully pulsed to ${printerIp}`);
-      return true;
-    } catch (e) {
-      console.error('[CashDrawer] Open command pulse failed:', e);
-      return false;
+    const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(printerIp.trim());
+    if (isIp) {
+      try {
+        // RJ11 command via TCP
+        await ThermalPrinter.printTcp({
+          ip: printerIp.trim(),
+          port: 9100,
+          payload: '\x1B\x70\x00\x19\x19',
+          openCashbox: true,
+          mmFeedPaper: 0,
+          autoCut: false,
+        });
+        console.log(`✅ [CashDrawer] Open command successfully pulsed via TCP to ${printerIp}`);
+        return true;
+      } catch (e) {
+        console.error('[CashDrawer] TCP open command pulse failed:', e);
+        return false;
+      }
+    } else {
+      try {
+        // RJ11 command via Bluetooth
+        await ThermalPrinter.printBluetooth({
+          macAddress: printerIp.trim(),
+          payload: '\x1B\x70\x00\x19\x19',
+          openCashbox: true,
+          mmFeedPaper: 0,
+          autoCut: false,
+        });
+        console.log(`✅ [CashDrawer] Open command successfully pulsed via Bluetooth to ${printerIp}`);
+        return true;
+      } catch (e) {
+        console.error('[CashDrawer] Bluetooth open command pulse failed:', e);
+        return false;
+      }
     }
   }
 

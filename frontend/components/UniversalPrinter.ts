@@ -434,10 +434,56 @@ class UniversalPrinter {
     }
   }
 
+  static async detectUsbPrinters(): Promise<Array<{ name: string; port: string; status: string; isUsb: boolean }>> {
+    try {
+      const res = await fetch(`http://localhost:3050/api/printers`);
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.printers)) {
+        return data.printers;
+      }
+    } catch (e) {
+      console.warn("[UniversalPrinter] Could not fetch USB printers from print bridge:", e);
+    }
+    return [];
+  }
+
+  private static async waitForJobCompletion(
+    jobId: string,
+    timeoutMs: number = 15000
+  ): Promise<{ success: boolean; error?: string }> {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 300));
+      try {
+        const res = await fetch(`${API_URL}/api/print-jobs/status/${jobId}`);
+        const data = await res.json();
+        if (data && data.success) {
+          if (data.status === "COMPLETED") {
+            return { success: true };
+          }
+          if (data.status === "FAILED") {
+            return {
+              success: false,
+              error: data.error || "Print job failed on thermal printer.",
+            };
+          }
+        }
+      } catch (e) {
+        // continue polling
+      }
+    }
+    // Job is still in the queue - bridge will pick it up and print.
+    // Don't treat this as a failure; return success so the UI isn't blocked.
+    console.warn(`[UniversalPrinter] Job ${jobId} still PENDING after ${timeoutMs}ms - bridge will print it shortly.`);
+    return { success: true };
+  }
+
   private static async queuePrintJob(
     printerType: number,
     kitchenTypeValue: string | number | undefined,
-    content: string
+    content: string,
+    waitForResult: boolean = true,
+    targetPrinterIp?: string
   ): Promise<boolean> {
     try {
       const storeId = "STORE_001";
@@ -451,7 +497,8 @@ class UniversalPrinter {
         body: JSON.stringify({
           printerType,
           kitchenTypeValue: kitchenTypeValue !== undefined ? String(kitchenTypeValue) : undefined,
-          content
+          content,
+          targetPrinterIp
         })
       });
       const data = await response.json();
@@ -459,14 +506,25 @@ class UniversalPrinter {
         console.warn(`[UniversalPrinter] queuePrintJob failed — backend returned:`, data);
         return false;
       }
-      // ✅ Fire-and-forget: the print bridge / APK will poll and execute the job.
-      // Do NOT poll for completion here — that 8s wait caused silent drops on Android browser
-      // when the screen dimmed or focus was lost during the polling window.
+
       console.log(`✅ [UniversalPrinter] Print job ${data.jobId} queued to bridge (Printer: ${data.printerName || data.printerIp || 'unknown'})`);
-      // Invalidate bridge cache so the next print reflects actual bridge state
       this._bridgeOnlineCache = null;
+
+      // Fire-and-forget: Job is safely in the DB. Don't block the UI waiting for completion.
+      // The Print Bridge will pick it up and print within its next poll cycle (every 500ms).
+      if (waitForResult) {
+        // Only wait in background without blocking; log result for debugging
+        this.waitForJobCompletion(data.jobId).then((result) => {
+          if (result.success) {
+            console.log(`🎉 [UniversalPrinter] Print job ${data.jobId} confirmed completed.`);
+          } else {
+            console.warn(`⚠️ [UniversalPrinter] Print job ${data.jobId} status:`, result.error);
+          }
+        }).catch(() => {});
+      }
       return true;
-    } catch (e) {
+    } catch (e: any) {
+      // Don't block the user with an alert if the backend is temporarily unreachable.
       console.warn("[UniversalPrinter] Failed to queue print job:", e);
       return false;
     }
@@ -733,14 +791,15 @@ class UniversalPrinter {
               );
               await Promise.race([printPromise, timeoutPromise]);
             } else {
-              console.log(`ðŸ”µ KOT Bluetooth print to: ${targetIp}`);
+              console.log(`🔵 KOT Bluetooth print to: ${targetIp}`);
+              await ThermalPrinterImport?.getBluetoothDeviceList?.().catch(() => {});
               const printPromise = ThermalPrinter.printBluetooth({
                 macAddress: targetIp,
                 payload: text,
                 mmFeedPaper: 25,
               });
               const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error("BT Timeout")), 3000),
+                setTimeout(() => reject(new Error("BT Timeout")), 12000),
               );
               await Promise.race([printPromise, timeoutPromise]);
             }
@@ -1126,7 +1185,7 @@ class UniversalPrinter {
     const orderNo     = data.orderNo || data.orderId || "";
     const kitchenName = data.kitchenName || "";
 
-    const kotDateStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
+    const kotDateStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", day: "2-digit", month: "2-digit", year: "2-digit" }).format(new Date());
     const kotTimeStr = formatToSingaporeTime(new Date(), { hour: "2-digit", minute: "2-digit", hour12: false });
 
     const DIV = "[L]------------------------------------------------\n";
@@ -1318,12 +1377,6 @@ class UniversalPrinter {
   ): Promise<boolean> {
     if (Platform.OS === "web") {
       try {
-        const isOnline = await this.isBridgeOnline();
-        if (!isOnline) {
-          console.log("ðŸ“¡ [Web Print Bridge] Bridge is OFFLINE. Direct fallback to preview.");
-          return await this.offerPDFFallback(saleData, outletId, t, discountInfo);
-        }
-
         const company = await BillPDFGenerator.loadSettings(outletId);
         const text = this.formatThermalTextWithDiscount(
           saleData,
@@ -1337,13 +1390,37 @@ class UniversalPrinter {
           String(saleData.tableNo).toUpperCase() === "TAKEAWAY" ||
           String(saleData.tableNo).toUpperCase() === "TAKE AWAY";
 
+        let cashierIp = company.printerIp || "";
+        let takeawayIp = company.printerIp || "";
+        try {
+          const now = Date.now();
+          let printers = this.cachedPrinters;
+          if (!printers || (now - this.lastPrintersFetchTime > 30000)) {
+            const response = await fetch(`${API_URL}/api/settings/kitchen-printers`);
+            printers = await response.json();
+            this.cachedPrinters = printers;
+            this.lastPrintersFetchTime = now;
+          }
+          if (Array.isArray(printers)) {
+            const cashierPrinter = printers.find((p: any) => p.PrinterType === 1);
+            const takeawayPrinter = printers.find((p: any) => p.PrinterType === 3);
+            cashierIp = cashierPrinter?.PrinterPath || cashierPrinter?.PrinterIP || cashierIp;
+            takeawayIp = takeawayPrinter?.PrinterPath || takeawayPrinter?.PrinterIP || takeawayIp;
+          }
+        } catch (err) {
+          console.warn("[UniversalPrinter] Failed to fetch printer IPs from PrintMaster:", err);
+        }
+
+        const targetIp = isTakeaway
+          ? (takeawayIp || cashierIp || company.printerIp || "")
+          : (cashierIp || company.printerIp || "");
+
         const pType = isTakeaway ? 3 : 1;
-        console.log(`ðŸ“¡ [Web Print Bridge] Queueing receipt to printer type: ${pType}`);
-        const success = await this.queuePrintJob(pType, undefined, text);
+        console.log(`📡 [Web Print Bridge] Queueing receipt (Type ${pType}, Target IP: ${targetIp || "default"})`);
+        const success = await this.queuePrintJob(pType, undefined, text, true, targetIp);
         if (success) return true;
 
-        // ðŸš€ Fallback: If Print Bridge failed or printer not detected on web, trigger iframe print preview immediately
-        console.log("âš ï¸ [Web Receipt Print] Print Bridge queue failed. Falling back to iframe print preview.");
+        console.log("⚠️ [Web Receipt Print] Print Bridge queue failed. Falling back to iframe print preview.");
         return await this.offerPDFFallback(saleData, outletId, t, discountInfo);
       } catch (err) {
         console.warn("[Web Print Bridge] Receipt Queue failed, falling back to iframe print preview:", err);
@@ -1400,6 +1477,20 @@ class UniversalPrinter {
         if (hasConfiguredIp) {
           console.log(`ðŸŒ Trying configured printer: ${targetIp}`);
           const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(targetIp.trim());
+
+          // 📲 Try Print Bridge if active on network (supports USB / Shared printers from APK)
+          const isBridge = await this.isBridgeOnline();
+          if (isBridge) {
+            try {
+              console.log(`📡 [APK Print Bridge] Queueing receipt to Print Bridge for: ${targetIp}`);
+              const text = this.formatThermalTextWithDiscount(saleData, company, discountInfo);
+              const pType = isTakeaway ? 3 : 1;
+              const success = await this.queuePrintJob(pType, undefined, text);
+              if (success) return;
+            } catch (bridgeErr) {
+              console.warn("APK Print Bridge queue failed, trying direct connection:", bridgeErr);
+            }
+          }
           let isReachable = false;
           if (isIp) {
             isReachable = await this.isIpReachable(targetIp, 9100);
@@ -1622,6 +1713,8 @@ class UniversalPrinter {
           mmFeedPaper: 25,
         });
       } else {
+        console.log(`🔵 Receipt Bluetooth print to: ${targetAddress}`);
+        await ThermalPrinterImport?.getBluetoothDeviceList?.().catch(() => {});
         await ThermalPrinter.printBluetooth({
           macAddress: targetAddress,
           payload: text,
@@ -2123,13 +2216,34 @@ class UniversalPrinter {
   }
 
   // ==================== UTILITIES ====================
+  private static isBeverageOrDessert(name?: string | null): boolean {
+    if (!name || typeof name !== "string") return false;
+    const clean = name.toLowerCase().trim();
+    return clean.includes("beverage") || clean.includes("dessert");
+  }
+
+  private static isBeverageOrDessertItem(item: any): boolean {
+    if (!item) return false;
+    const names = [
+      item.KitchenTypeName,
+      item.kitchenTypeName,
+      item.CategoryName,
+      item.categoryName,
+      item.DishGroupName,
+      item.dishGroupName,
+      item.groupName,
+      item.kitchenName,
+    ];
+    return names.some((name) => this.isBeverageOrDessert(name));
+  }
+
   private static async checkAndroidPrintService(): Promise<boolean> {
     return Platform.OS === "android";
   }
 
   static async routeAndPrintOrderKOT(
     orderId: string,
-    orderContext: { orderType?: string; tableNo?: string; takeawayNo?: string; section?: string },
+    orderContext: { orderType?: string; tableNo?: string; takeawayNo?: string; section?: string; entryStatus?: string; orderSource?: string },
     items: any[],
     isAdditional: boolean = false,
     waiterName: string = "Staff",
@@ -2154,6 +2268,12 @@ class UniversalPrinter {
         return false;
       }
 
+      const isQROrder =
+        (orderContext as any)?.entryStatus === "q" ||
+        (orderContext as any)?.orderSource === "QR" ||
+        (orderContext as any)?.orderType === "QR" ||
+        waiterName === "QR Order";
+
       const tableNo =
         orderContext.orderType === "DINE_IN"
           ? orderContext.tableNo
@@ -2164,11 +2284,17 @@ class UniversalPrinter {
         // Expand combo sub-items that belong to a different kitchen
         const expandedItems: any[] = [];
         items.forEach((item: any) => {
+          if (this.isBeverageOrDessertItem(item)) {
+            return;
+          }
           expandedItems.push(item);
           if (!enableComboPrint && item.comboSelections && item.comboSelections.length > 0) {
             item.comboSelections.forEach((g: any) => {
               if (Array.isArray(g.items)) {
                 g.items.forEach((opt: any) => {
+                  if (this.isBeverageOrDessertItem(opt)) {
+                    return;
+                  }
                   const optKitchenCode =
                     opt.KitchenTypeCode || opt.kitchenCode || opt.kitchenTypeCode;
                   const parentKitchenCode =
@@ -2200,23 +2326,24 @@ class UniversalPrinter {
         });
 
         for (const [kCode, groupItems] of Object.entries(kitchenGroups)) {
-          const kNameLower = (groupItems[0].KitchenTypeName || groupItems[0].kitchenTypeName || '').toLowerCase();
-          // Skip KOT print for Beverage/Dessert kitchen
-          if (kCode === '10' || kCode === '8' || kNameLower.includes('beverage') || kNameLower.includes('dessert') || kNameLower.includes('drink') || kNameLower.includes('bar')) {
-            console.log(`🖨️ [UniversalPrinter] 🥤 Skipping KOT print for Beverage/Dessert kitchen group ${kCode} (${groupItems[0].KitchenTypeName})`);
+          const kitchenName = groupItems[0].KitchenTypeName || (kCode === "0" ? "KITCHEN" : kCode);
+          if (this.isBeverageOrDessert(kitchenName) || this.isBeverageOrDessert(kCode)) {
+            console.log(`🖨️ [UniversalPrinter] Skipping KOT for kitchen ${kitchenName} (Beverage / Dessert)`);
             continue;
           }
-
-          const printerIp = groupItems[0].PrinterIP || groupItems[0].printerIp;
+          const validGroupItems = groupItems.filter((i: any) => !this.isBeverageOrDessertItem(i));
+          if (validGroupItems.length === 0) {
+            continue;
+          }
+          const printerIp = validGroupItems[0].PrinterIP || validGroupItems[0].printerIp;
           const kotData = {
             orderId,
             orderNo: orderId,
             tableNo,
             waiterName,
-            items: groupItems,
+            items: validGroupItems,
             kitchenCode: kCode,
-            kitchenName:
-              groupItems[0].KitchenTypeName || (kCode === "0" ? "KITCHEN" : kCode),
+            kitchenName,
             disableComboPrint: !!enableComboPrint,
           };
           try {
@@ -2238,6 +2365,20 @@ class UniversalPrinter {
       // 6. KDS backup copy (respects enableKDSPrint setting)
       if (shouldPrintKDS) {
         try {
+          let kdsPrinterIp = "";
+          try {
+            let printers = this.cachedPrinters;
+            if (!printers) {
+              const res = await fetch(`${API_URL}/api/settings/kitchen-printers`);
+              printers = await res.json();
+              this.cachedPrinters = printers;
+            }
+            if (Array.isArray(printers)) {
+              const kdsPrinter = printers.find((p: any) => p.PrinterType === 4 || (p.KitchenName && p.KitchenName.toUpperCase() === "KDS"));
+              kdsPrinterIp = kdsPrinter?.PrinterPath || kdsPrinter?.PrinterIP || "";
+            }
+          } catch (e) {}
+
           const kdsData = {
             orderId,
             orderNo: orderId,
@@ -2246,7 +2387,8 @@ class UniversalPrinter {
             items,
             kitchenName: "KDS",
           };
-          await this.printKDSOrder(kdsData, "SYSTEM");
+          console.log(`🖨️ [UniversalPrinter] Printing KDS order (Printer IP: ${kdsPrinterIp || "default"})`);
+          await this.printKDSOrder(kdsData, "SYSTEM", kdsPrinterIp);
         } catch (kdsErr) {
           console.error("[UniversalPrinter] KDS backup print failed:", kdsErr);
         }
@@ -2782,11 +2924,23 @@ class UniversalPrinter {
 
       if (Platform.OS === "web") {
         try {
-          const isOnline = await this.isBridgeOnline();
-          if (isOnline) {
-            // Queue to Cashier printer (Type 1) via the bridge
-            return await this.queuePrintJob(1, undefined, text);
-          }
+          let cashierIp = company.cashierPrinterIp || company.printerIp || "";
+          try {
+            let printers = this.cachedPrinters;
+            if (!printers) {
+              const res = await fetch(`${API_URL}/api/settings/kitchen-printers`);
+              printers = await res.json();
+              this.cachedPrinters = printers;
+            }
+            if (Array.isArray(printers)) {
+              const cashierPrinter = printers.find((p: any) => p.PrinterType === 1);
+              cashierIp = cashierPrinter?.PrinterPath || cashierPrinter?.PrinterIP || cashierIp;
+            }
+          } catch (e) {}
+
+          console.log(`📡 [Web Print Bridge] Queueing settlement report (Target IP: ${cashierIp || "default"})`);
+          const success = await this.queuePrintJob(1, undefined, text, true, cashierIp);
+          if (success) return true;
         } catch (err) {
           console.warn("Print Bridge failed for Z-Report:", err);
         }

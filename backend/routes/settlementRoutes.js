@@ -163,6 +163,166 @@ router.get("/active-day", async (req, res) => {
   }
 });
 
+router.get("/users-settlement", async (req, res) => {
+  try {
+    const { fromDate, toDate } = req.query;
+    const pool = getPool();
+    const dateStr = fromDate || new Date().toISOString().split('T')[0];
+    const endDateStr = toDate || dateStr;
+
+    // 1. Fetch registered users from UserMaster (Admin and Cashier user groups only)
+    const usersRes = await pool.request().query(`
+      SELECT 
+        CAST(u.UserId AS NVARCHAR(50)) AS CashierId,
+        ISNULL(NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserName) AS CashierName,
+        ISNULL(u.UserName, '-') AS UserLogin,
+        ISNULL(u.UserCode, '-') AS UserCode,
+        ISNULL(g.UserGroupName, 'Cashier') AS RoleName
+      FROM UserMaster u
+      LEFT JOIN UserGroupMaster g ON u.UserGroupid = g.UserGroupId
+      WHERE UPPER(LTRIM(RTRIM(ISNULL(g.UserGroupName, '')))) IN ('ADMIN', 'CASHIER', 'ADMINISTRATOR', 'SUPERADMIN')
+         OR UPPER(LTRIM(RTRIM(ISNULL(u.UserName, '')))) IN ('ADMIN', 'UNIPRO', 'OWNER', 'CASHIER')
+      ORDER BY u.UserName ASC
+    `);
+
+    // 2. Fetch login-wise sales for date range
+    const salesRes = await pool.request()
+      .input("fromDate", sql.Date, new Date(dateStr))
+      .input("toDate", sql.Date, new Date(endDateStr))
+      .query(`
+        WITH HeaderTotals AS (
+          SELECT
+            sh.CashierId,
+            COUNT(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN 1 END) AS TotalBills,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.SubTotal ELSE 0 END), 0) AS TotalSubTotal,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.DiscountAmount ELSE 0 END), 0) AS TotalDiscount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.ServiceCharge ELSE 0 END), 0) AS TotalServiceCharge,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.TotalTax ELSE 0 END), 0) AS TotalTax,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.TakeawayCharge ELSE 0 END), 0) AS TotalTakeaway,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.VoidItemAmount ELSE 0 END), 0) AS TotalVoidAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.VoidItemQty ELSE 0 END), 0) AS TotalVoidQty,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.RoundedBy ELSE 0 END), 0) AS TotalRounded,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.SysAmount ELSE 0 END), 0) AS TotalSales,
+            ISNULL(SUM(CASE WHEN sh.IsCancelled = 1 THEN 1 ELSE 0 END), 0) AS CancelledBills
+          FROM SettlementHeader sh
+          WHERE COALESCE(sh.start_date, CAST(sh.LastSettlementDate AS DATE)) BETWEEN @fromDate AND @toDate
+          GROUP BY sh.CashierId
+        ),
+        PaymentTotals AS (
+          SELECT
+            sh.CashierId,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('CASH','CAS','1') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS CashAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('CARD','VISA','MASTER','MASTERCARD','AMEX') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS CardAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('PAYNOW','3') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS PayNowAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('NETS','2') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS NetsAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('MEMBER','5') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS MemberAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('CREDIT','6') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS CreditAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('GRAB','10') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS GrabAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('FOODPANDA','9') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS FoodPandaAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('UPI','GPAY') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS UpiAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('FOC','4') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS FocAmount,
+            ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(ISNULL(sts.PayMode,'')) LIKE 'YEAHPAY%' THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS YeahPayAmount
+          FROM SettlementHeader sh
+          LEFT JOIN SettlementTotalSales sts ON sh.SettlementID = sts.SettlementID
+          WHERE COALESCE(sh.start_date, CAST(sh.LastSettlementDate AS DATE)) BETWEEN @fromDate AND @toDate
+          GROUP BY sh.CashierId
+        ),
+        CreditCollections AS (
+          SELECT
+            cct.CreatedBy AS CashierIdRaw,
+            ISNULL(SUM(cct.PaidAmount), 0) AS CreditCollectedAmount
+          FROM CustomerCreditTransactions cct
+          WHERE cct.TransactionType = 'PAYMENT'
+            AND ISNULL(cct.CustomerType, 'CREDIT') = 'CREDIT'
+            AND CAST(COALESCE(cct.start_date, cct.CreatedDate) AS DATE) BETWEEN @fromDate AND @toDate
+          GROUP BY cct.CreatedBy
+        )
+        SELECT
+          CAST(sh.CashierId AS NVARCHAR(50)) AS CashierIdRaw,
+          sh.CashierId,
+          ISNULL(h.TotalSubTotal, 0) AS TotalSubTotal,
+          ISNULL(h.TotalDiscount, 0) AS TotalDiscount,
+          ISNULL(h.TotalServiceCharge, 0) AS TotalServiceCharge,
+          ISNULL(h.TotalTax, 0) AS TotalTax,
+          ISNULL(h.TotalTakeaway, 0) AS TotalTakeaway,
+          ISNULL(h.TotalSales, 0) AS TotalSales,
+          ISNULL(p.CashAmount, 0) AS CashAmount,
+          ISNULL(p.CardAmount, 0) AS CardAmount,
+          ISNULL(p.PayNowAmount, 0) AS PayNowAmount,
+          ISNULL(p.NetsAmount, 0) AS NetsAmount,
+          ISNULL(p.MemberAmount, 0) AS MemberAmount,
+          ISNULL(p.CreditAmount, 0) AS CreditAmount,
+          ISNULL(p.GrabAmount, 0) AS GrabAmount,
+          ISNULL(p.FoodPandaAmount, 0) AS FoodPandaAmount,
+          ISNULL(p.UpiAmount, 0) AS UpiAmount,
+          ISNULL(p.YeahPayAmount, 0) AS YeahPayAmount,
+          ISNULL(cc.CreditCollectedAmount, 0) AS CreditCollectedAmount
+        FROM SettlementHeader sh
+        LEFT JOIN HeaderTotals h ON h.CashierId = sh.CashierId
+        LEFT JOIN PaymentTotals p ON p.CashierId = sh.CashierId
+        LEFT JOIN CreditCollections cc ON (
+          TRY_CAST(cc.CashierIdRaw AS UNIQUEIDENTIFIER) = TRY_CAST(sh.CashierId AS UNIQUEIDENTIFIER)
+          OR CAST(cc.CashierIdRaw AS NVARCHAR(50)) = CAST(sh.CashierId AS NVARCHAR(50))
+          OR LOWER(LTRIM(RTRIM(cc.CashierIdRaw))) = LOWER(LTRIM(RTRIM(sh.CashierId)))
+        )
+        WHERE COALESCE(sh.start_date, CAST(sh.LastSettlementDate AS DATE), CAST(sh.CreatedOn AS DATE)) BETWEEN @fromDate AND @toDate
+          AND ISNULL(sh.IsCancelled, 0) = 0
+        GROUP BY
+          CAST(sh.CashierId AS NVARCHAR(50)), sh.CashierId,
+          h.TotalSubTotal, h.TotalDiscount, h.TotalServiceCharge, h.TotalTax, h.TotalTakeaway, h.TotalSales,
+          p.CashAmount, p.CardAmount, p.PayNowAmount, p.NetsAmount, p.MemberAmount, p.CreditAmount, p.GrabAmount, p.FoodPandaAmount, p.UpiAmount, p.YeahPayAmount,
+          cc.CreditCollectedAmount
+      `);
+
+    const salesMap = {};
+    (salesRes.recordset || []).forEach(row => {
+      if (row.CashierId) {
+        const key = String(row.CashierId).trim().toLowerCase();
+        salesMap[key] = row;
+      }
+    });
+
+    const userList = (usersRes.recordset || []).map(u => {
+      const uId = String(u.CashierId || "").trim().toLowerCase();
+      const uName = String(u.UserLogin || "").trim().toLowerCase();
+      const uFull = String(u.CashierName || "").trim().toLowerCase();
+
+      const salesData = salesMap[uId] || salesMap[uName] || salesMap[uFull] || {};
+
+      return {
+        CashierId: u.CashierId,
+        CashierName: u.CashierName,
+        UserLogin: u.UserLogin,
+        RoleName: u.RoleName,
+        TotalBills: salesData.TotalBills || 0,
+        CancelledBills: salesData.CancelledBills || 0,
+        TotalSales: salesData.TotalSales || 0,
+        TotalSubTotal: salesData.TotalSubTotal || 0,
+        TotalDiscount: salesData.TotalDiscount || 0,
+        TotalServiceCharge: salesData.TotalServiceCharge || 0,
+        TotalTax: salesData.TotalTax || 0,
+        TotalTakeaway: salesData.TotalTakeaway || 0,
+        CashAmount: salesData.CashAmount || 0,
+        CardAmount: salesData.CardAmount || 0,
+        PayNowAmount: salesData.PayNowAmount || 0,
+        NetsAmount: salesData.NetsAmount || 0,
+        MemberAmount: salesData.MemberAmount || 0,
+        CreditAmount: salesData.CreditAmount || 0,
+        GrabAmount: salesData.GrabAmount || 0,
+        FoodPandaAmount: salesData.FoodPandaAmount || 0,
+        UpiAmount: salesData.UpiAmount || 0,
+        YeahPayAmount: salesData.YeahPayAmount || 0,
+        CreditCollectedAmount: salesData.CreditCollectedAmount || 0,
+      };
+    });
+
+    res.json({ success: true, data: userList });
+  } catch (err) {
+    console.error("Users Settlement Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/day-log", async (req, res) => {
   try {
     const { date } = req.query;
@@ -218,37 +378,8 @@ router.get("/day-history", async (req, res) => {
   try {
     const { date, fromDate, toDate } = req.query;
     const pool = getPool();
-
-    // Auto-backfill missing Day Start/End entries from BusinessDayLog into BusinessDayAuditLog
-    try {
-      // 1. Insert missing DAY_START audit records
-      await pool.request().query(`
-        INSERT INTO BusinessDayAuditLog (BusinessDate, EventType, EventTime, ActionBy)
-        SELECT BusinessDate, 'DAY_START', StartedAt, ISNULL(StartedBy, 'admin')
-        FROM BusinessDayLog
-        WHERE StartedAt IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM BusinessDayAuditLog 
-            WHERE BusinessDate = BusinessDayLog.BusinessDate AND EventType = 'DAY_START'
-          );
-      `);
-
-      // 2. Insert missing DAY_END audit records (only for days explicitly ended by user)
-      await pool.request().query(`
-        INSERT INTO BusinessDayAuditLog (BusinessDate, EventType, EventTime, ActionBy)
-        SELECT BusinessDate, 'DAY_END', EndedAt, ISNULL(EndedBy, 'admin')
-        FROM BusinessDayLog
-        WHERE EndedAt IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM BusinessDayAuditLog 
-            WHERE BusinessDate = BusinessDayLog.BusinessDate AND EventType = 'DAY_END'
-          );
-      `);
-    } catch (backfillErr) {
-      console.warn("⚠️ [day-history] Auto-backfill warning:", backfillErr.message);
-    }
-
     const request = pool.request();
+
     let query = `
       SELECT AuditId, BusinessDate, EventType, EventTime, ActionBy, Remarks
       FROM BusinessDayAuditLog
@@ -263,7 +394,7 @@ router.get("/day-history", async (req, res) => {
       query += ` WHERE BusinessDate BETWEEN @fromDate AND @toDate`;
     }
 
-    query += ` ORDER BY EventTime DESC, AuditId DESC`;
+    query += ` ORDER BY EventTime DESC`;
 
     const result = await request.query(query);
     res.json({ success: true, data: result.recordset || [] });
@@ -272,7 +403,6 @@ router.get("/day-history", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 
 
 // ============================================
@@ -729,21 +859,32 @@ router.post('/save-denominations', authenticateToken, async (req, res) => {
 router.get('/cash-out/:terminal', authenticateToken, async (req, res) => {
   try {
     const { terminal } = req.params;
-    const { fromDate, toDate } = req.query;
+    const { fromDate, toDate, userId } = req.query;
     const pool = getPool();
     const request = pool.request();
 
-    let dateFilter = "COALESCE(start_date, CAST(CashOutDate as DATE)) = CAST(GETDATE() as DATE)";
+    let dateFilter = "COALESCE(CAST(CashOutDate as DATE), start_date) = CAST(GETDATE() as DATE)";
     if (fromDate && toDate) {
       request.input("fromDate", sql.Date, new Date(fromDate));
       request.input("toDate", sql.Date, new Date(toDate));
-      dateFilter = "COALESCE(start_date, CAST(CashOutDate as DATE)) BETWEEN @fromDate AND @toDate";
+      dateFilter = "COALESCE(CAST(CashOutDate as DATE), start_date) BETWEEN @fromDate AND @toDate";
+    }
+
+    let userFilter = "";
+    if (userId && userId !== "ALL" && userId !== "0") {
+      request.input("userIdParam", sql.VarChar, userId);
+      userFilter = ` AND (
+        LOWER(LTRIM(RTRIM(CreatedBy))) = LOWER(LTRIM(RTRIM(@userIdParam))) 
+        OR TRY_CAST(CreatedBy AS NVARCHAR(50)) = @userIdParam
+        OR CreatedBy IN (SELECT UserName FROM UserMaster WHERE CAST(UserId AS NVARCHAR(50)) = @userIdParam OR LOWER(LTRIM(RTRIM(UserName))) = LOWER(LTRIM(RTRIM(@userIdParam))) OR LOWER(LTRIM(RTRIM(FullName))) = LOWER(LTRIM(RTRIM(@userIdParam))))
+        OR CreatedBy IN (SELECT FullName FROM UserMaster WHERE CAST(UserId AS NVARCHAR(50)) = @userIdParam OR LOWER(LTRIM(RTRIM(UserName))) = LOWER(LTRIM(RTRIM(@userIdParam))) OR LOWER(LTRIM(RTRIM(FullName))) = LOWER(LTRIM(RTRIM(@userIdParam))))
+      )`;
     }
 
     let query = `
       SELECT CashOutId, CashOutNo, CashOutDate, Amount, Reason, Remarks, PaymentMode, ReferenceNo, TerminalCode, CreatedBy, CreatedOn, start_date, AttachmentUrl
       FROM CashOutEntry 
-      WHERE ${dateFilter}
+      WHERE ${dateFilter}${userFilter}
     `;
 
     query += ` ORDER BY CreatedOn DESC`;
@@ -760,15 +901,28 @@ router.get('/cash-out/:terminal', authenticateToken, async (req, res) => {
 router.get('/cash-in/:terminal', authenticateToken, async (req, res) => {
   try {
     const { terminal } = req.params;
-    const { fromDate, toDate } = req.query;
+    const { fromDate, toDate, userId } = req.query;
     const pool = getPool();
     const request = pool.request();
 
-    let dateFilter = "COALESCE(start_date, CAST(CashInDate as DATE)) = CAST(GETDATE() as DATE)";
+    let dateFilter = "COALESCE(CAST(CashInDate as DATE), start_date) = CAST(GETDATE() as DATE)";
     if (fromDate && toDate) {
       request.input("fromDate", sql.Date, new Date(fromDate));
       request.input("toDate", sql.Date, new Date(toDate));
-      dateFilter = "COALESCE(start_date, CAST(CashInDate as DATE)) BETWEEN @fromDate AND @toDate";
+      dateFilter = "COALESCE(CAST(CashInDate as DATE), start_date) BETWEEN @fromDate AND @toDate";
+    }
+
+    let userFilter = "";
+    if (userId && userId !== "ALL" && userId !== "0") {
+      request.input("userIdParam", sql.VarChar, userId);
+      userFilter = ` AND (
+        LOWER(LTRIM(RTRIM(ci.CreatedBy))) = LOWER(LTRIM(RTRIM(@userIdParam))) 
+        OR TRY_CAST(ci.CreatedBy AS NVARCHAR(50)) = @userIdParam 
+        OR LOWER(LTRIM(RTRIM(sh.CashierId))) = LOWER(LTRIM(RTRIM(@userIdParam))) 
+        OR TRY_CAST(sh.CashierId AS NVARCHAR(50)) = @userIdParam
+        OR ci.CreatedBy IN (SELECT UserName FROM UserMaster WHERE CAST(UserId AS NVARCHAR(50)) = @userIdParam OR LOWER(LTRIM(RTRIM(UserName))) = LOWER(LTRIM(RTRIM(@userIdParam))) OR LOWER(LTRIM(RTRIM(FullName))) = LOWER(LTRIM(RTRIM(@userIdParam))))
+        OR ci.CreatedBy IN (SELECT FullName FROM UserMaster WHERE CAST(UserId AS NVARCHAR(50)) = @userIdParam OR LOWER(LTRIM(RTRIM(UserName))) = LOWER(LTRIM(RTRIM(@userIdParam))) OR LOWER(LTRIM(RTRIM(FullName))) = LOWER(LTRIM(RTRIM(@userIdParam))))
+      )`;
     }
 
     let query = `
@@ -801,7 +955,7 @@ router.get('/cash-in/:terminal', authenticateToken, async (req, res) => {
       LEFT JOIN SettlementHeader sh ON ci.ReferenceNo = CAST(sh.SettlementID AS VARCHAR(50))
       LEFT JOIN CustomerCreditTransactions cct ON ci.ReferenceNo = CAST(cct.SettlementId AS VARCHAR(50))
       LEFT JOIN PaymentTransactionDetails ptd ON ci.ReferenceNo = CAST(ptd.PaymentTransactionId AS VARCHAR(50))
-      WHERE ${dateFilter.replace(/start_date/g, 'ci.start_date').replace(/CashInDate/g, 'ci.CashInDate')}
+      WHERE ${dateFilter.replace(/start_date/g, 'ci.start_date').replace(/CashInDate/g, 'ci.CashInDate')}${userFilter}
     `;
 
     query += ` ORDER BY ci.CreatedOn DESC`;
@@ -823,7 +977,7 @@ router.post('/cash-in', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Valid amount is required' });
     }
 
-    const createdBy = req.user?.userName || req.user?.username || 'Admin';
+    const createdBy = req.body.createdBy || req.user?.userName || req.user?.username || req.user?.id || req.user?.userId || 'Admin';
     const pool = getPool();
 
     const targetDate = date ? new Date(date) : new Date();
@@ -924,7 +1078,7 @@ router.post('/cash-out', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Valid amount is required' });
     }
 
-    const createdBy = req.user?.userName || req.user?.username || 'Admin';
+    const createdBy = req.body.createdBy || req.user?.userName || req.user?.username || req.user?.id || req.user?.userId || 'Admin';
     const pool = getPool();
 
     // Generate simple auto-incrementing/timestamp-based CashOutNo

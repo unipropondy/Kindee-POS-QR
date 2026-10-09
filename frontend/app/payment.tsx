@@ -1,6 +1,5 @@
 import { API_URL } from "@/constants/Config";
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
-import { useIsFocused } from "@react-navigation/native";
 import { useLocalSearchParams, usePathname, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -191,7 +190,7 @@ export default function PaymentScreen() {
   const remarksParam =
     (params.remarks as string) || "Credit payment collection via POS checkout";
 
-  const isFocused = useIsFocused() && pathname.includes("/payment");
+  const isFocused = pathname === "/payment" && pathname.includes("/payment");
   const pathnameRef = React.useRef(pathname);
   pathnameRef.current = pathname;
   const closeActiveOrder = useActiveOrdersStore((s) => s.closeActiveOrder);
@@ -362,7 +361,9 @@ export default function PaymentScreen() {
   const settingsStore = useCompanySettingsStore((state: { settings: CompanySettings }) => state.settings);
   const currencySymbol = settingsStore.currencySymbol || "$";
   const gstRate = (settingsStore.gstPercentage || 0) / 100;
-  const scRate = (settingsStore.serviceChargePercentage || 0) / 100;
+  const isTakeawayOrder = context?.orderType === "TAKEAWAY";
+  const dineInScRate = isTakeawayOrder ? 0 : (settingsStore.serviceChargePercentage || 0) / 100;
+  const twScRate = (settingsStore.twServiceChargePercentage || 0) / 100;
 
   const handleTerminalPaymentSuccess = React.useCallback((methodName: string, totalAmt: number, msg?: string) => {
     const lockKey = (context?.tableId || displayOrderId || "MAIN_PAYMENT_LOCK").toString();
@@ -850,6 +851,7 @@ export default function PaymentScreen() {
     totalItemDiscount: payItemDiscount,
     totalFocAmount,
     scEligibleSubtotal,
+    twScEligibleSubtotal,
     calcTakeawayChargeAmt,
     takeawayQty,
     hasMixedTWCharges,
@@ -862,6 +864,7 @@ export default function PaymentScreen() {
         totalFocAmount: 0,
         subtotal: collectAmount || 0,
         scEligibleSubtotal: 0,
+        twScEligibleSubtotal: 0,
         calcTakeawayChargeAmt: 0,
         takeawayQty: 0,
         hasMixedTWCharges: false,
@@ -892,7 +895,7 @@ export default function PaymentScreen() {
         }
         const itemSubtotal = baseTotal - itemDiscount;
         const itemFocAmount = item.isFoc ? itemSubtotal : 0;
-        const isTakeawayItem = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway;
+        const isTakeawayItem = isTakeawayOrder || Boolean(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway || String(item.isTakeaway) === "1" || String(item.IsTakeaway) === "1" || String(item.isTakeAway) === "1" || String(item.IsTakeAway) === "1");
         const isSC =
           !isTakeawayItem && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true);
         
@@ -916,6 +919,8 @@ export default function PaymentScreen() {
           subtotal: acc.subtotal + itemSubtotal,
           scEligibleSubtotal:
             acc.scEligibleSubtotal + (isSC && !item.isFoc ? itemSubtotal : 0),
+          twScEligibleSubtotal:
+            acc.twScEligibleSubtotal + (isTakeawayItem && !item.isFoc ? itemSubtotal : 0),
           calcTakeawayChargeAmt: acc.calcTakeawayChargeAmt + (isTakeawayItem && !item.isFoc ? itemTWCharge : 0),
           takeawayQty: acc.takeawayQty + (isTakeawayItem && !item.isFoc ? (item.qty || 1) : 0),
         };
@@ -926,6 +931,7 @@ export default function PaymentScreen() {
         totalFocAmount: 0,
         subtotal: 0,
         scEligibleSubtotal: 0,
+        twScEligibleSubtotal: 0,
         calcTakeawayChargeAmt: 0,
         takeawayQty: 0,
       },
@@ -936,7 +942,7 @@ export default function PaymentScreen() {
       hasMixedTWCharges: mixed,
       singleTWRate: firstRate !== null ? firstRate : takeawayCharges,
     };
-  }, [finalItems, isLedgerCollection, collectAmount, takeawayCharges]);
+  }, [finalItems, isLedgerCollection, collectAmount, takeawayCharges, isTakeawayOrder]);
 
   const allItemsHaveSC = useMemo(() => {
     const activeItems = finalItems.filter(
@@ -946,12 +952,12 @@ export default function PaymentScreen() {
       activeItems.length > 0 &&
       activeItems.every(
         (item: any) => {
-          const isTakeawayItem = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway;
+          const isTakeawayItem = isTakeawayOrder || Boolean(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
           return !isTakeawayItem && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true);
         },
       )
     );
-  }, [finalItems]);
+  }, [finalItems, isTakeawayOrder]);
 
   const discountAmount = useMemo(() => {
     if (isLedgerCollection) return 0;
@@ -975,6 +981,14 @@ export default function PaymentScreen() {
     return Math.max(0, scEligibleSubtotal - proportion * discountAmount);
   }, [scEligibleSubtotal, subtotal, totalFocAmount, discountAmount, isLedgerCollection]);
 
+  const twScEligibleNet = useMemo(() => {
+    if (isLedgerCollection || subtotal <= 0) return 0;
+    const payableSubtotal = Math.max(0, subtotal - totalFocAmount);
+    if (payableSubtotal <= 0) return 0;
+    const proportion = twScEligibleSubtotal / payableSubtotal;
+    return Math.max(0, twScEligibleSubtotal - proportion * discountAmount);
+  }, [twScEligibleSubtotal, subtotal, totalFocAmount, discountAmount, isLedgerCollection]);
+
   const billDiscountProportion = useMemo(() => {
     if (isLedgerCollection) return 0;
     if (!discount?.applied) return 0;
@@ -991,7 +1005,9 @@ export default function PaymentScreen() {
     return calcTakeawayChargeAmt * (1 - billDiscountProportion);
   }, [takeawayChargeApplied, calcTakeawayChargeAmt, billDiscountProportion, isLedgerCollection]);
 
-  const serviceChargeAmt = isLedgerCollection ? 0 : (scReduced || scReducedLocal ? 0 : scEligibleNet * scRate);
+  const dineInServiceChargeAmt = isLedgerCollection || scReduced || scReducedLocal ? 0 : scEligibleNet * dineInScRate;
+  const twServiceChargeAmt = isLedgerCollection || scReduced || scReducedLocal ? 0 : twScEligibleNet * twScRate;
+  const serviceChargeAmt = dineInServiceChargeAmt + twServiceChargeAmt;
   const taxableAmount = netAfterDiscount + serviceChargeAmt + currentTakeawayCharge;
   const tax = isLedgerCollection ? 0 : taxableAmount * gstRate;
   const baseTotal = taxableAmount + tax;
@@ -1136,8 +1152,15 @@ export default function PaymentScreen() {
         deviceSalt: d.deviceSalt || null,
       }));
 
+      // Sort active paymodes first so deduplication prioritizes active entries
+      const sortedByActive = [...mapped].sort((a, b) => {
+        const aActive = a.active === 1 || a.active === true || a.active === "1" || a.active === null || a.active === undefined;
+        const bActive = b.active === 1 || b.active === true || b.active === "1" || b.active === null || b.active === undefined;
+        return (bActive ? 1 : 0) - (aActive ? 1 : 0);
+      });
+
       const seen = new Set<string>();
-      const deduped = mapped.filter((m) => {
+      const deduped = sortedByActive.filter((m) => {
         const key = isCashMethod(m.payMode)
           ? "__CASH__"
           : m.payMode.toUpperCase().trim();
@@ -1726,7 +1749,7 @@ export default function PaymentScreen() {
         payments: finalPayments,
         memberId: memberOverride?.MemberId || selectedMember?.MemberId || null,
         roundOff: displayedRoundOff,
-        cashierId: user?.userId,
+        cashierId: user?.userId || user?.userName || user?.userCode || "owner",
         tableId: context?.tableId,
         serverId: context?.serverId,
         serverName: context?.serverName,
@@ -3414,17 +3437,25 @@ export default function PaymentScreen() {
                         </>
                       )}
 
-                      {displayedServiceCharge > 0 && (
+                      {dineInServiceChargeAmt > 0 && (
                         <View style={styles.breakRow}>
                           <Text style={styles.breakLabel}>
-                            {allItemsHaveSC
-                              ? "Service Charge"
-                              : "Item Service Charge"}{" "}
-                            ({settingsStore.serviceChargePercentage || 0}%)
+                            {allItemsHaveSC ? "Service Charge" : "Item Service Charge"} ({settingsStore.serviceChargePercentage || 0}%)
                           </Text>
                           <Text style={styles.breakValue}>
                             {currencySymbol}
-                            {displayedServiceCharge.toFixed(2)}
+                            {dineInServiceChargeAmt.toFixed(2)}
+                          </Text>
+                        </View>
+                      )}
+                      {twServiceChargeAmt > 0 && (
+                        <View style={styles.breakRow}>
+                          <Text style={styles.breakLabel}>
+                            TW Service Charge ({settingsStore.twServiceChargePercentage || 0}%)
+                          </Text>
+                          <Text style={styles.breakValue}>
+                            {currencySymbol}
+                            {twServiceChargeAmt.toFixed(2)}
                           </Text>
                         </View>
                       )}

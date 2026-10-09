@@ -503,31 +503,8 @@ export default function CustomerOrderStatusScreen() {
     const handleCartUpdated = (data: { tableId: string; source?: string }) => {
       const cleanTarget = String(data.tableId || "").replace(/^\{|\}$/g, "").trim().toLowerCase();
       const cleanCurrent = String(orderContext.tableId).replace(/^\{|\}$/g, "").trim().toLowerCase();
-      if (cleanTarget === cleanCurrent) {
-        // If another device placed the order, clear any local NEW items and fetch
-        if (data.source === "order_sent") {
-          const ctxId = useCartStore.getState().currentContextId;
-          if (ctxId) {
-            useCartStore.setState((state) => {
-              const existing = state.carts[ctxId] || [];
-              const clearedCart = existing.filter((item: any) => item.status && item.status !== "NEW");
-              const newQtyMap: Record<string, number> = {};
-              clearedCart.forEach((item: any) => { newQtyMap[item.id] = (newQtyMap[item.id] || 0) + item.qty; });
-              return {
-                carts: { ...state.carts, [ctxId]: clearedCart },
-                cartQtyMap: { ...state.cartQtyMap, [ctxId]: newQtyMap },
-                lastLocalUpdate: { ...state.lastLocalUpdate, [ctxId]: 0 },
-              };
-            });
-          }
-          if (orderContext.tableId) {
-            fetchCartFromDB(orderContext.tableId, true);
-          }
-        } else {
-          if (orderContext.tableId) {
-            fetchCartFromDB(orderContext.tableId);
-          }
-        }
+      if (cleanTarget === cleanCurrent && orderContext.tableId) {
+        fetchCartFromDB(orderContext.tableId, true);
       }
     };
 

@@ -43,6 +43,7 @@ export interface CompanySettings {
   waiterRequired: boolean;
   holdOvertimeMinutes: number;
   serviceChargePercentage: number;
+  twServiceChargePercentage: number;
   takeawayCharges: number;
 }
 
@@ -72,6 +73,7 @@ const DEFAULT_SETTINGS: CompanySettings = {
   waiterRequired: true,
   holdOvertimeMinutes: 30,
   serviceChargePercentage: 0,
+  twServiceChargePercentage: 0,
   takeawayCharges: 0,
 };
 
@@ -109,6 +111,7 @@ export const useCompanySettingsStore = create<CompanySettingsState>()(
                 waiterRequired: s.WaiterRequired !== undefined ? !!s.WaiterRequired : true,
                 holdOvertimeMinutes: parseInt(s.HoldOvertimeMinutes) || 30,
                 serviceChargePercentage: parseFloat(s.ServiceChargePercentage) || 0,
+                twServiceChargePercentage: parseFloat(s.TWServiceChargePercentage) || 0,
                 takeawayCharges: parseFloat(s.TakeawayCharges) || 0,
               },
             });
@@ -150,6 +153,7 @@ export const useCompanySettingsStore = create<CompanySettingsState>()(
               WaiterRequired: updated.waiterRequired,
               HoldOvertimeMinutes: updated.holdOvertimeMinutes,
               ServiceChargePercentage: updated.serviceChargePercentage,
+              TWServiceChargePercentage: updated.twServiceChargePercentage,
               TakeawayCharges: updated.takeawayCharges,
             }),
           });

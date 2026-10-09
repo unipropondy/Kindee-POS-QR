@@ -201,6 +201,7 @@ export default function CustomerCartScreen() {
   
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const isSendingRef = useRef(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [userInfo, setUserInfo] = useState<any>(null);
   const [applyPromo, setApplyPromo] = useState(false);
@@ -240,27 +241,7 @@ export default function CustomerCartScreen() {
     const handleCartUpdated = (data: { tableId: string; source?: string }) => {
       const incomingId = String(data.tableId || "").replace(/^\{|\}$/g, "").trim().toLowerCase();
       if (incomingId === tableId) {
-        if (data.source === "order_sent") {
-          // 🔴 Another user placed an order: wipe local NEW drafts so Place Order button disappears
-          const ctxId = useCartStore.getState().currentContextId;
-          if (ctxId) {
-            useCartStore.setState((state) => {
-              const existing = state.carts[ctxId] || [];
-              const clearedCart = existing.filter((item: any) => item.status && item.status !== "NEW");
-              const newQtyMap: Record<string, number> = {};
-              clearedCart.forEach((item: any) => { newQtyMap[item.id] = (newQtyMap[item.id] || 0) + item.qty; });
-              return {
-                carts: { ...state.carts, [ctxId]: clearedCart },
-                cartQtyMap: { ...state.cartQtyMap, [ctxId]: newQtyMap },
-                lastLocalUpdate: { ...state.lastLocalUpdate, [ctxId]: 0 },
-              };
-            });
-          }
-          useCartStore.getState().fetchCartFromDB(orderContext.tableId!, true);
-        } else {
-          // 🟡 Normal cart update (item added/edited): gentle fetch, keep local NEW items safe
-          useCartStore.getState().fetchCartFromDB(orderContext.tableId!);
-        }
+        useCartStore.getState().fetchCartFromDB(orderContext.tableId!, true);
       }
     };
 
@@ -384,16 +365,20 @@ export default function CustomerCartScreen() {
   };
 
   const handlePlaceOrder = async () => {
+    if (isSendingRef.current || submitting || isAnimating) return;
+    isSendingRef.current = true;
+
     if (currentCart.length === 0) {
       Alert.alert("Cart Empty", "Please add items to your cart first.");
+      isSendingRef.current = false;
       return;
     }
     if (!orderContext?.tableId) {
       Alert.alert("Error", "Table session not found. Please restart.");
+      isSendingRef.current = false;
       return;
     }
 
-    if (submitting || isAnimating) return;
     setIsAnimating(true);
     setSubmitting(true);
 
@@ -452,16 +437,20 @@ export default function CustomerCartScreen() {
         // 🛑 CANCEL any pending debounced syncCartWithDB FIRST
         cancelPendingSync();
 
-        // ✅ IMMEDIATE CLEAR: Wipe all local "NEW" draft items right away
+        // ✅ MARK SENT: Update local "NEW" draft items to "SENT" status immediately
         const ctxId = currentContextId;
         if (ctxId) {
           useCartStore.setState((state) => {
             const existing = state.carts[ctxId] || [];
-            const clearedCart = existing.filter(item => item.status && item.status !== "NEW");
+            const updatedCart = existing.map(item => ({
+              ...item,
+              status: (item.status === "NEW" || !item.status) ? ("SENT" as const) : item.status,
+              sent: 1
+            }));
             const newQtyMap: Record<string, number> = {};
-            clearedCart.forEach(item => { newQtyMap[item.id] = (newQtyMap[item.id] || 0) + item.qty; });
+            updatedCart.forEach(item => { newQtyMap[item.id] = (newQtyMap[item.id] || 0) + item.qty; });
             return {
-              carts: { ...state.carts, [ctxId]: clearedCart },
+              carts: { ...state.carts, [ctxId]: updatedCart },
               cartQtyMap: { ...state.cartQtyMap, [ctxId]: newQtyMap },
               lastLocalUpdate: { ...state.lastLocalUpdate, [ctxId]: 0 },
             };
@@ -486,12 +475,14 @@ export default function CustomerCartScreen() {
         Alert.alert("Order Failed", "Failed to send items to the kitchen. Please contact staff.");
         setIsAnimating(false);
         setSubmitting(false);
+        isSendingRef.current = false;
       }
     } catch (err) {
       console.error("Error placing order:", err);
       Alert.alert("Network Error", "Failed to contact order server. Please try again.");
       setIsAnimating(false);
       setSubmitting(false);
+      isSendingRef.current = false;
     }
   };
 

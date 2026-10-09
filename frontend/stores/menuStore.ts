@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { API_URL } from '@/constants/Config';
+import { socket } from '@/constants/socket';
 
 interface MenuState {
   kitchens: any[];
@@ -10,7 +11,7 @@ interface MenuState {
   lastFetched: number | null;
   isLoading: boolean;
 
-  fetchMenu: () => Promise<void>;
+  fetchMenu: (force?: boolean) => Promise<void>;
   fetchGroups: (kitchenId: string) => Promise<any[]>;
   fetchDishes: (groupId: string) => Promise<any[]>;
   fetchModifiersForGroup: (groupId: string) => Promise<void>;
@@ -27,10 +28,10 @@ export const useMenuStore = create<MenuState>((set, get) => ({
   lastFetched: null,
   isLoading: false,
 
-  fetchMenu: async () => {
+  fetchMenu: async (force = false) => {
     const { lastFetched, kitchens } = get();
-    // Cache for 10 minutes
-    if (lastFetched && kitchens.length > 0 && Date.now() - lastFetched < 600000) {
+    // Cache for 10 minutes unless forced
+    if (!force && lastFetched && kitchens.length > 0 && Date.now() - lastFetched < 600000) {
       return;
     }
 
@@ -155,6 +156,13 @@ export const useMenuStore = create<MenuState>((set, get) => ({
       console.warn("Backend cache clear failed:", err);
     }
     get().clearCache();
-    await get().fetchMenu();
+    await get().fetchMenu(true);
   },
 }));
+
+// 🔌 Real-time Socket Listener for Menu Updates (e.g. IsPublished toggle = 1 or 0)
+socket.on('menu_updated', (data) => {
+  console.log('⚡ [MenuStore] Received menu_updated socket event:', data);
+  useMenuStore.getState().clearCache();
+  useMenuStore.getState().fetchMenu(true);
+});

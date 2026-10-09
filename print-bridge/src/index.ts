@@ -1,11 +1,11 @@
-﻿import { app as electronApp } from 'electron';
+import { app as electronApp } from 'electron';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import * as path from 'path';
 import * as fs from 'fs';
 import { config } from './config';
 import { startPoller, pollerStats } from './poller';
-import { sendToPrinter, checkPrinterReachable } from './printer';
+import { sendToPrinter, checkPrinterReachable, getInstalledPrinters } from './printer';
 import { logger } from './logger';
 import {
   startMonitorWatcher,
@@ -85,7 +85,7 @@ app.get('/settings', (req: Request, res: Response) => {
 });
 
 // 1.4 GET /api/status - Rich runtime status for the Settings Dashboard
-app.get('/api/status', (req: Request, res: Response) => {
+app.get('/api/status', async (req: Request, res: Response) => {
   let appVersion = '1.0.0';
   let electronVersion = process.versions.electron || 'N/A';
   const nodeVersion   = process.version;
@@ -100,7 +100,6 @@ app.get('/api/status', (req: Request, res: Response) => {
 
   let configPath = 'N/A';
   try {
-    // Resolve the same config file path logic as config.ts
     const execDir        = path.dirname(process.execPath);
     const execConfigPath = path.join(execDir, 'config.json');
     const localConfig    = path.join(process.cwd(), 'config.json');
@@ -117,11 +116,16 @@ app.get('/api/status', (req: Request, res: Response) => {
   } catch (_) {}
 
   const health = pollerStats.getHealth();
+  const installedPrinters = await getInstalledPrinters().catch(() => []);
+  const usbPrinters = installedPrinters.filter(p => p.isUsb || p.name.toUpperCase().includes('TD80') || p.name.toUpperCase().includes('POS80'));
+  const usbStatusStr = usbPrinters.length > 0 
+    ? usbPrinters.map(p => `${p.name} (${p.port || 'USB'})`).join(', ')
+    : 'No USB receipt printer detected';
 
   res.json({
     bridgeRunning:             true,
-    printerConnected:          health.connected,
-    customerDisplayConnected:  false, // updated by customer display manager if needed
+    printerConnected:          health.connected || usbPrinters.length > 0,
+    customerDisplayConnected:  false,
     appVersion,
     electronVersion,
     nodeVersion,
@@ -130,12 +134,22 @@ app.get('/api/status', (req: Request, res: Response) => {
     printer: {
       ip:        config.backends?.[0]?.url || 'N/A',
       port:      9100,
-      status:    health.connected ? 'Connected' : 'Disconnected',
-      usbStatus: 'Not configured',
+      status:    (health.connected || usbPrinters.length > 0) ? 'Connected' : 'Disconnected',
+      usbStatus: usbStatusStr,
     },
     kitchenRoutes:  'Via Railway backend',
-    cashierPrinter: 'Receipt Printer (TCP)',
+    cashierPrinter: 'Receipt Printer (USB/TCP)',
   });
+});
+
+// 1.45 GET /api/printers - List all installed system printers (including USB printers)
+app.get('/api/printers', async (req: Request, res: Response) => {
+  try {
+    const printers = await getInstalledPrinters();
+    res.json({ success: true, printers });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // 1.5 GET /api/logs - Return latest 100 log lines

@@ -678,6 +678,13 @@ router.post("/pay", async (req, res) => {
       const referenceNo = (payments && payments.length > 0) ? (payments[0].referenceNo || paymentSessionId || '') : (paymentSessionId || '');
       const mainRemarks = `${req.body.remarks || `Credit payment collection (${payModeName})`} [Session: ${paymentSessionId || ''}]`;
 
+      // Fetch active business start_date
+      let startDate = null;
+      const activeDayRes = await transaction.request().query("SELECT TOP 1 StartDate FROM DateEntry ORDER BY CreatedDate DESC");
+      if (activeDayRes.recordset.length > 0) {
+        startDate = activeDayRes.recordset[0].StartDate;
+      }
+
       // 1. Write the primary PAYMENT transaction record
       const payTxResult = await transaction.request()
         .input("MemberId", sql.UniqueIdentifier, memberId)
@@ -686,10 +693,11 @@ router.post("/pay", async (req, res) => {
         .input("ReferenceNo", sql.NVarChar(100), referenceNo)
         .input("Remarks", sql.NVarChar(500), mainRemarks.substring(0, 500))
         .input("CreatedBy", sql.UniqueIdentifier, toGuidOrNull(userId))
+        .input("StartDate", sql.Date, startDate)
         .query(`
-          INSERT INTO CustomerCreditTransactions (MemberId, TransactionType, BillAmount, PaidAmount, OutstandingAmount, PaymentMethod, ReferenceNo, Status, Remarks, CreatedBy)
+          INSERT INTO CustomerCreditTransactions (MemberId, TransactionType, BillAmount, PaidAmount, OutstandingAmount, PaymentMethod, ReferenceNo, Status, Remarks, CreatedBy, CustomerType, start_date)
           OUTPUT INSERTED.TransactionId
-          VALUES (@MemberId, 'PAYMENT', 0, @Amount, -@Amount, @PaymentMethod, @ReferenceNo, 'CLOSED', @Remarks, @CreatedBy)
+          VALUES (@MemberId, 'PAYMENT', 0, @Amount, -@Amount, @PaymentMethod, @ReferenceNo, 'CLOSED', @Remarks, @CreatedBy, 'MEMBER', @StartDate)
         `);
       
       paymentTransactionId = payTxResult.recordset[0].TransactionId;

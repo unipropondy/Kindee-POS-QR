@@ -70,7 +70,7 @@ export default function LoginScreen() {
           } else if (userName === "KDS") {
             router.replace("/kds" as any);
           } else {
-            router.replace("/(tabs)/category");
+            router.replace("/order-type" as any);
           }
           return;
         }
@@ -173,7 +173,7 @@ export default function LoginScreen() {
         } else if (role === "KDS") {
           router.replace("/(tabs)/kds" as any);
         } else {
-          router.replace("/(tabs)/category"); // Default for Admin, Manager, Waiter, Cashier
+          router.replace("/order-type" as any); // Default for Admin, Manager, Waiter, Cashier
         }
       } else {
         setError(data.message || "Login failed. Please try again.");

@@ -11,7 +11,8 @@ const normalizePayMode = (paymentMethod = "CASH") => {
   if (raw.includes("GRAB") || raw === "10") return "GRAB";
   if (raw.includes("FOODPANDA") || raw === "9") return "FOODPANDA";
   if (raw.includes("PAYNOW") || raw === "3" || raw.includes("PAY NOW")) return "PAYNOW";
-  if (raw.includes("UPI") || raw === "4" || raw.includes("GPAY") || raw.includes("PHONE") || raw.includes("PAYTM")) return "UPI";
+  if (raw.includes("FOC") || raw === "4" || raw.includes("FREE OF CHARGE")) return "FOC";
+  if (raw.includes("UPI") || raw.includes("GPAY") || raw.includes("PHONE") || raw.includes("PAYTM")) return "UPI";
   if (raw.includes("NETS") || raw === "2") return "NETS";
   if (raw.includes("MEMBER") || raw === "5") return "MEMBER";
   if (raw.includes("CREDIT") || raw === "6") return "CREDIT";
@@ -21,15 +22,15 @@ const normalizePayMode = (paymentMethod = "CASH") => {
 /**
  * Fetch and compute full sales report data for a given date range
  */
-async function fetchFullReportData(startDateStr, endDateStr, pool) {
+async function fetchFullReportData(startDateStr, endDateStr, pool, cashierFilter = null) {
   const companySettings = await getCompanySettings();
   
   const sgtStart = `CAST('${startDateStr}' AS DATE)`;
   const sgtEnd = `DATEADD(DAY, 1, CAST('${endDateStr}' AS DATE))`;
 
   // 1. Fetch combined sales list (same logic as /all endpoint)
-  const shWhere = `sh.start_date >= CAST('${startDateStr}' AS DATE) AND sh.start_date <= CAST('${endDateStr}' AS DATE)`;
-  const cctWhere = `CAST(cct.CreatedDate AS DATE) >= CAST('${startDateStr}' AS DATE) AND CAST(cct.CreatedDate AS DATE) <= CAST('${endDateStr}' AS DATE)`;
+  const shWhere = `CAST(COALESCE(sh.start_date, CAST(sh.LastSettlementDate AS DATE), CAST(sh.CreatedOn AS DATE)) AS DATE) >= CAST('${startDateStr}' AS DATE) AND CAST(COALESCE(sh.start_date, CAST(sh.LastSettlementDate AS DATE), CAST(sh.CreatedOn AS DATE)) AS DATE) <= CAST('${endDateStr}' AS DATE)`;
+  const cctWhere = `CAST(COALESCE(cct.start_date, CAST(cct.CreatedDate AS DATE)) AS DATE) >= CAST('${startDateStr}' AS DATE) AND CAST(COALESCE(cct.start_date, CAST(cct.CreatedDate AS DATE)) AS DATE) <= CAST('${endDateStr}' AS DATE)`;
 
   const salesQuery = `
     SELECT 
@@ -68,13 +69,20 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
     SELECT 
       cct.TransactionId AS SettlementID,
       cct.CreatedDate AS SettlementDate,
-      CASE WHEN mm.MemberId IS NOT NULL THEN 'Member Payment Collected' ELSE 'Credit Payment Collected' END AS OrderId,
+      CASE 
+        WHEN cct.CustomerType = 'CREDIT' THEN 'Credit Payment Collected'
+        WHEN cct.CustomerType = 'MEMBER' THEN 'Member Payment Collected'
+        WHEN m.CustomerId IS NOT NULL THEN 'Credit Payment Collected'
+        WHEN mm.MemberId IS NOT NULL THEN 'Member Payment Collected'
+        ELSE 'Credit Payment Collected'
+      END AS OrderId,
       'LEDGER' AS OrderType,
       'LEDGER' AS TableNo,
-      COALESCE(mm.Name, m.Name, 'Customer') AS Section,
+      COALESCE(m.Name, mm.Name, 'Customer') AS Section,
       CAST(cct.CreatedBy AS VARCHAR(50)) AS CashierId,
       cct.Remarks AS BillNo,
       'Cashier' AS SER_NAME,
+      NULL AS entryStatus,
       cct.PaymentMethod AS RawPayMode,
       cct.PaidAmount AS SysAmount,
       cct.PaidAmount AS SubTotal,
@@ -90,13 +98,22 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
       0 AS RoundedBy,
       0 AS OutstandingAmount
     FROM CustomerCreditTransactions cct
-    LEFT JOIN CreditCustomerMaster m ON cct.MemberId = m.CustomerId
-    LEFT JOIN MemberMaster mm ON cct.MemberId = mm.MemberId
+    LEFT JOIN CreditCustomerMaster m ON cct.MemberId = m.CustomerId AND (cct.CustomerType = 'CREDIT' OR cct.CustomerType IS NULL)
+    LEFT JOIN MemberMaster mm ON cct.MemberId = mm.MemberId AND (cct.CustomerType = 'MEMBER' OR (cct.CustomerType IS NULL AND m.CustomerId IS NULL))
     WHERE cct.TransactionType = 'PAYMENT' AND ${cctWhere}
   `;
 
   const salesResult = await pool.request().query(salesQuery);
-  const salesList = salesResult.recordset || [];
+  let salesList = salesResult.recordset || [];
+
+  if (cashierFilter && cashierFilter !== 'ALL') {
+    const filterStr = String(cashierFilter).toLowerCase().trim();
+    salesList = salesList.filter(s => {
+      const cid = String(s.CashierId || '').toLowerCase().trim();
+      const cname = String(s.SER_NAME || '').toLowerCase().trim();
+      return cid === filterStr || cname.includes(filterStr) || filterStr.includes(cid);
+    });
+  }
 
   // 2. Compute Metrics matching frontend sales-report.tsx
   const paymodesRes = await pool.request().query("SELECT Position, PayMode, Description, Active FROM [dbo].[Paymode] ORDER BY Position ASC");
@@ -116,7 +133,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
   const breakdown = {};
   const breakdownCounts = {};
   allPaymodes.forEach(pm => {
-    const key = pm.PayMode.toUpperCase().trim();
+    const key = ((pm.Description && pm.Description.trim()) || pm.PayMode).toUpperCase().trim();
     breakdown[key] = 0;
     breakdownCounts[key] = 0;
   });
@@ -168,7 +185,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
      // First pass: try exact match against all database payment modes
      let matchedMode = allPaymodes.find(pm => {
        const name = pm.PayMode.toUpperCase().trim();
-       const desc = (pm.Description || pm.PayMode).toUpperCase().trim();
+       const desc = ((pm.Description && pm.Description.trim()) || pm.PayMode).toUpperCase().trim();
        return rawMode === name || rawMode === desc;
      });
 
@@ -176,11 +193,12 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
     if (!matchedMode) {
       matchedMode = allPaymodes.find(pm => {
         const name = pm.PayMode.toUpperCase().trim();
-        if ((name === "PAYNOW" || name === "PAY NOW" || name === "UPI" || name === "GPAY") &&
+        const desc = ((pm.Description && pm.Description.trim()) || pm.PayMode).toUpperCase().trim();
+        if ((name === "PAYNOW" || desc === "PAYNOW" || name === "PAY NOW" || desc === "PAY NOW" || name === "UPI" || name === "GPAY") &&
             (rawMode.includes("PAYNOW") || rawMode.includes("PAY NOW") || rawMode.includes("UPI") || rawMode.includes("GPAY") || rawMode.includes("PHONE") || rawMode.includes("PAYTM"))) {
           return true;
         }
-        if ((name === "CASH" || name === "CAS") && (rawMode === "CASH" || rawMode === "CAS")) {
+        if ((name === "CASH" || desc === "CASH" || name === "CAS") && (rawMode === "CASH" || rawMode === "CAS")) {
           return true;
         }
         return false;
@@ -188,7 +206,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
     }
 
     if (matchedMode) {
-      const name = matchedMode.PayMode.toUpperCase().trim();
+      const name = ((matchedMode.Description && matchedMode.Description.trim()) || matchedMode.PayMode).toUpperCase().trim();
       breakdown[name] = (breakdown[name] || 0) + (s.SysAmount || 0);
       breakdownCounts[name] = (breakdownCounts[name] || 0) + 1;
       if (name === "CREDIT") {
@@ -224,6 +242,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
   const orderTypesTotal = dineInCount + takeawayCount;
   const dineInPct = orderTypesTotal > 0 ? (dineInCount / orderTypesTotal) * 100 : 0;
   const takeawayPct = orderTypesTotal > 0 ? (takeawayCount / orderTypesTotal) * 100 : 0;
+  const qrOrderCount = 0;
   const qrPct = totalTransactions > 0 ? (qrOrderCount / totalTransactions) * 100 : 0;
 
   // 3. Fetch category report (AppReport + ProfessionalReport union)
@@ -441,6 +460,45 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
   const artistResult = await pool.request().query(artistQuery);
   const artistSalesList = artistResult.recordset || [];
 
+  // 5b. Login-wise cashier breakdown (for PDF cashier section)
+  const loginWiseQuery = `
+    SELECT
+      ISNULL(um.FullName, ISNULL(um.UserName, sh.CashierId)) AS CashierName,
+      sh.CashierId,
+      COUNT(DISTINCT sh.SettlementID) AS TotalBills,
+      SUM(ISNULL(sh.SysAmount, 0)) AS TotalSales,
+      SUM(CASE WHEN UPPER(ISNULL(sts.PayMode,'')) = 'CASH' THEN ISNULL(sts.SysAmount,0) ELSE 0 END) AS CashAmount,
+      SUM(CASE WHEN UPPER(ISNULL(sts.PayMode,'')) = 'CARD' THEN ISNULL(sts.SysAmount,0) ELSE 0 END) AS CardAmount,
+      SUM(CASE WHEN UPPER(ISNULL(sts.PayMode,'')) = 'NETS' THEN ISNULL(sts.SysAmount,0) ELSE 0 END) AS NetsAmount,
+      SUM(CASE WHEN UPPER(ISNULL(sts.PayMode,'')) = 'PAYNOW' THEN ISNULL(sts.SysAmount,0) ELSE 0 END) AS PayNowAmount,
+      SUM(CASE WHEN UPPER(ISNULL(sts.PayMode,'')) = 'CREDIT' THEN ISNULL(sts.SysAmount,0) ELSE 0 END) AS CreditAmount
+    FROM SettlementHeader sh
+    LEFT JOIN SettlementTotalSales sts ON sh.SettlementID = sts.SettlementID
+    LEFT JOIN UserMaster um ON LOWER(CAST(sh.CashierId AS VARCHAR(100))) = LOWER(CAST(um.UserId AS VARCHAR(100)))
+      OR LOWER(CAST(sh.CashierId AS VARCHAR(100))) = LOWER(CAST(um.UserName AS VARCHAR(100)))
+    WHERE sh.IsCancelled = 0
+      AND ${shWhere.replace(/sh\./g, 'sh.')}
+    GROUP BY sh.CashierId, ISNULL(um.FullName, ISNULL(um.UserName, sh.CashierId))
+    ORDER BY TotalSales DESC;
+  `;
+  let loginWiseSales = [];
+  try {
+    const loginWiseResult = await pool.request().query(loginWiseQuery);
+    loginWiseSales = (loginWiseResult.recordset || []).map(r => ({
+      CashierId: r.CashierId,
+      CashierName: r.CashierName || String(r.CashierId || 'UNKNOWN'),
+      TotalBills: Number(r.TotalBills) || 0,
+      TotalSales: Number(r.TotalSales) || 0,
+      CashAmount: Number(r.CashAmount) || 0,
+      CardAmount: Number(r.CardAmount) || 0,
+      NetsAmount: Number(r.NetsAmount) || 0,
+      PayNowAmount: Number(r.PayNowAmount) || 0,
+      CreditAmount: Number(r.CreditAmount) || 0,
+    }));
+  } catch (lwErr) {
+    console.warn('[reportDataFetcher] login-wise query failed (non-fatal):', lwErr.message);
+  }
+
   // 6. Format SGT time period string
   const formatSgtDate = (dateStr) => {
     const d = new Date(dateStr);
@@ -572,6 +630,7 @@ async function fetchFullReportData(startDateStr, endDateStr, pool) {
     trendData,
 
     // Reports lists
+    loginWiseSales,
     categories: categoriesList,
     items: itemsList,
     artistSales: artistSalesList

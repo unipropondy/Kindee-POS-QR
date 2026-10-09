@@ -1,5 +1,8 @@
 import * as net from 'net';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { exec, execFile } from 'child_process';
 import { logger } from './logger';
 
 /**
@@ -125,17 +128,10 @@ export async function sendToPrinter(ip: string, port: number, content: string, j
     const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip.trim());
 
     if (!isIp && ip.trim().length > 0) {
-      const sharePath = ip.trim().startsWith('\\\\') ? ip.trim() : `\\\\localhost\\${ip.trim()}`;
-      logger.info(`[Print Bridge] USB/Shared printer detected. Writing to path: ${sharePath}`);
-      fs.writeFile(sharePath, payload, (err: any) => {
-        if (err) {
-          logger.error(`[Print Bridge] USB/Shared print failed: ${err.message}`);
-          reject(err);
-        } else {
-          logger.info(`[Print Bridge] USB/Shared print completed successfully.`);
-          resolve();
-        }
-      });
+      logger.info(`[Print Bridge] USB/Named printer detected: '${ip.trim()}'. Sending via Win32 RawPrinter.`);
+      sendToWindowsPrinter(ip.trim(), payload)
+        .then(() => resolve())
+        .catch((err) => reject(err));
       return;
     }
 
@@ -187,3 +183,147 @@ export async function sendToPrinter(ip: string, port: number, content: string, j
     });
   });
 }
+
+/**
+ * Sends raw ESC/POS binary buffer directly to a Windows printer spooler by name.
+ * Uses winspool.drv via PowerShell C# Win32 API.
+ */
+export function sendToWindowsPrinter(printerName: string, payload: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let cleanName = printerName.trim();
+    if (cleanName.toLowerCase().startsWith('\\\\localhost\\')) {
+      cleanName = cleanName.substring(13);
+    } else if (cleanName.startsWith('\\\\')) {
+      const parts = cleanName.split('\\').filter(Boolean);
+      if (parts.length === 1) {
+        cleanName = parts[0];
+      }
+    }
+
+    const tmpDir = os.tmpdir();
+    const tmpFile = path.join(tmpDir, `unipro_print_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.bin`);
+
+    try {
+      fs.writeFileSync(tmpFile, payload);
+    } catch (fsErr: any) {
+      return reject(new Error(`Failed to write temp print file: ${fsErr.message}`));
+    }
+
+    // Try fast pre-compiled C# binary RawPrint.exe (Instant ~30ms execution)
+    const candidatePaths = [
+      path.join(__dirname, 'RawPrint.exe'),
+      path.join(__dirname, '..', 'src', 'RawPrint.exe'),
+      path.join(process.cwd(), 'dist', 'RawPrint.exe'),
+      path.join(process.cwd(), 'src', 'RawPrint.exe'),
+      path.join(process.cwd(), 'RawPrint.exe')
+    ];
+    const exePath = candidatePaths.find(p => fs.existsSync(p));
+
+    if (exePath) {
+      execFile(exePath, [cleanName, tmpFile], (err, stdout, stderr) => {
+        try { fs.unlinkSync(tmpFile); } catch (_) {}
+        if (err || !stdout.includes('SUCCESS')) {
+          let errorMsg = stderr.trim() || stdout.trim() || (err ? err.message : 'Printer not reachable');
+          logger.error(`[Print Bridge] USB Printer '${cleanName}' print failed: ${errorMsg}`);
+          reject(new Error(`USB Printer '${cleanName}' is not connected or printing failed. (${errorMsg})`));
+        } else {
+          logger.info(`[Print Bridge] USB Printer '${cleanName}' print completed INSTANTLY via RawPrint.exe.`);
+          resolve();
+        }
+      });
+      return;
+    }
+
+    // Fallback: PowerShell C# Win32 API
+    const safePrinterName = cleanName.replace(/'/g, "''");
+    const safeFilePath = tmpFile.replace(/'/g, "''");
+
+    const psScript = `
+$p = '${safePrinterName}';
+$f = '${safeFilePath}';
+if (-not (Test-Path $f)) { Write-Host 'NO_FILE'; exit 1 }
+$b = [System.IO.File]::ReadAllBytes($f);
+$c = @'
+using System;
+using System.Runtime.InteropServices;
+public class RawPrinter {
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+    public class DOCINFO1 { public string pDocName; public string pOutputFile; public string pDataType; }
+    [DllImport("winspool.drv", CharSet=CharSet.Unicode, ExactSpelling=false, CallingConvention=CallingConvention.StdCall, SetLastError=true)]
+    public static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
+    [DllImport("winspool.drv", ExactSpelling=true, CallingConvention=CallingConvention.StdCall, SetLastError=true)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+    [DllImport("winspool.drv", CharSet=CharSet.Unicode, ExactSpelling=false, CallingConvention=CallingConvention.StdCall, SetLastError=true)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int Level, DOCINFO1 pDocInfo);
+    [DllImport("winspool.drv", ExactSpelling=true, CallingConvention=CallingConvention.StdCall, SetLastError=true)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+    [DllImport("winspool.drv", ExactSpelling=true, CallingConvention=CallingConvention.StdCall, SetLastError=true)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.drv", ExactSpelling=true, CallingConvention=CallingConvention.StdCall, SetLastError=true)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.drv", ExactSpelling=true, CallingConvention=CallingConvention.StdCall, SetLastError=true)]
+    public static extern bool WritePrinter(IntPtr hPrinter, byte[] pBytes, int dwCount, out int dwWritten);
+
+    public static bool SendBytes(string printerName, byte[] bytes) {
+        IntPtr hPrinter;
+        if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) return false;
+        DOCINFO1 di = new DOCINFO1(); di.pDocName = "UniPro POS Receipt"; di.pDataType = "RAW";
+        if (!StartDocPrinter(hPrinter, 1, di)) { ClosePrinter(hPrinter); return false; }
+        if (!StartPagePrinter(hPrinter)) { EndDocPrinter(hPrinter); ClosePrinter(hPrinter); return false; }
+        int written = 0; bool ok = WritePrinter(hPrinter, bytes, bytes.Length, out written);
+        EndPagePrinter(hPrinter); EndDocPrinter(hPrinter); ClosePrinter(hPrinter);
+        return ok && (written == bytes.Length);
+    }
+}
+'@;
+if (-not ([System.Management.Automation.PSTypeName]'RawPrinter').Type) { Add-Type -TypeDefinition $c }
+if ([RawPrinter]::SendBytes($p, $b)) { Write-Host "SUCCESS" } else { Write-Host "FAILED"; exit 1 }
+`;
+
+    const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
+    const command = `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedScript}`;
+
+    exec(command, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      try { fs.unlinkSync(tmpFile); } catch (_) {}
+      if (err || stdout.trim() !== 'SUCCESS') {
+        let errorMsg = stderr.trim() || stdout.trim() || (err ? err.message : 'Printer not reachable');
+        if (errorMsg.includes('CLIXML')) {
+          errorMsg = 'Printer handle could not be opened or printer is offline/disconnected';
+        }
+        logger.error(`[Print Bridge] USB Printer '${cleanName}' print failed: ${errorMsg}`);
+        reject(new Error(`USB Printer '${cleanName}' is not connected or printing failed. (${errorMsg})`));
+      } else {
+        logger.info(`[Print Bridge] USB Printer '${cleanName}' print completed successfully.`);
+        resolve();
+      }
+    });
+  });
+}
+
+/**
+ * Returns installed printers on Windows OS
+ */
+export function getInstalledPrinters(): Promise<Array<{ name: string; port: string; status: string; isUsb: boolean }>> {
+  return new Promise((resolve) => {
+    const cmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Printer | Select-Object Name, PrinterStatus, PortName, DriverName | ConvertTo-Json"`;
+    exec(cmd, (err, stdout) => {
+      if (err || !stdout.trim()) {
+        return resolve([]);
+      }
+      try {
+        const parsed = JSON.parse(stdout.trim());
+        const list = Array.isArray(parsed) ? parsed : [parsed];
+        const printers = list.map((p: any) => ({
+          name: p.Name || '',
+          port: p.PortName || '',
+          status: p.PrinterStatus || 'Unknown',
+          isUsb: String(p.PortName || '').toUpperCase().startsWith('USB'),
+        }));
+        resolve(printers);
+      } catch (e) {
+        resolve([]);
+      }
+    });
+  });
+}
+

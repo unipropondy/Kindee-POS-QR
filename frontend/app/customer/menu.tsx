@@ -25,6 +25,7 @@ import { API_URL } from "../../constants/Config";
 import { Ionicons } from "@expo/vector-icons";
 import { formatToSingaporeDate, formatToSingaporeTime } from "../../utils/timezoneHelper";
 import { useGeneralSettingsStore } from "../../stores/generalSettingsStore";
+import { isDishAvailableNow } from "../../utils/timeAvailabilityHelper";
 
 const { width } = Dimensions.get("window");
 
@@ -389,15 +390,15 @@ const LogoutButtonWeb = ({ onConfirm }: { onConfirm: () => void }) => {
 
 export default function CustomerMenuScreen() {
   const router = useRouter();
-  const { kitchens, allDishes, dishGroups: storeDishGroups, fetchMenu, fetchGroups, modifierCache, isLoading, forceRefreshMenu } = useMenuStore();
+  const { kitchens, allDishes, fetchMenu, fetchGroups, modifierCache, isLoading, forceRefreshMenu } = useMenuStore();
   const { carts, currentContextId, addToCartGlobal } = useCartStore();
   const orderContext = useOrderContextStore((state) => state.currentOrder);
 
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedKitchenId, setSelectedKitchenId] = useState<string | null>(null);
+  const [dishGroups, setDishGroups] = useState<any[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [groupsLoading, setGroupsLoading] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const onRefresh = async () => {
@@ -583,32 +584,7 @@ export default function CustomerMenuScreen() {
     const handleCartUpdated = (data: { tableId: string; source?: string }) => {
       const incomingId = String(data.tableId || "").replace(/^\{|\}$/g, "").trim().toLowerCase();
       if (incomingId === tableId) {
-        if (data.source === "order_sent") {
-          // 🔴 ANOTHER USER PLACED AN ORDER: Aggressively wipe local NEW drafts so the
-          // merge logic in fetchCartFromDB won't re-add them (stops Place Order button staying visible).
-          const ctxId = useCartStore.getState().currentContextId;
-          if (ctxId) {
-            useCartStore.setState((state) => {
-              const existing = state.carts[ctxId] || [];
-              // Keep only server-confirmed items (SENT/READY/SERVED/HOLD/VOIDED)
-              const clearedCart = existing.filter((item: any) => item.status && item.status !== "NEW");
-              const newQtyMap: Record<string, number> = {};
-              clearedCart.forEach((item: any) => { newQtyMap[item.id] = (newQtyMap[item.id] || 0) + item.qty; });
-              return {
-                carts: { ...state.carts, [ctxId]: clearedCart },
-                cartQtyMap: { ...state.cartQtyMap, [ctxId]: newQtyMap },
-                // Reset lastLocalUpdate so the merge logic treats local items as stale
-                lastLocalUpdate: { ...state.lastLocalUpdate, [ctxId]: 0 },
-              };
-            });
-          }
-          // Force-fetch bypasses Latency Shield; stale local items won't re-appear
-          useCartStore.getState().fetchCartFromDB(orderContext.tableId!, true);
-        } else {
-          // 🟡 NORMAL CART UPDATE (item added/edited by same or other user):
-          // Gentle fetch — respects local edits, no wipe. Latency Shield is active.
-          useCartStore.getState().fetchCartFromDB(orderContext.tableId!);
-        }
+        useCartStore.getState().fetchCartFromDB(orderContext.tableId!, true);
       }
     };
 
@@ -641,35 +617,64 @@ export default function CustomerMenuScreen() {
     }
   }, [totalItems]);
 
-  // Load first kitchen by default
+  // Helper for Customer QR Menu IsPublished filtering:
+  // IsPublished = 0 (or false/null) -> SHOW (Published)
+  // IsPublished = 1 (or true/'1') -> EXCLUDE (Unpublished)
+  const isPublishedForQR = (val: any) => {
+    if (val === 1 || val === true || String(val) === '1') {
+      return false; // Exclude from QR menu
+    }
+    return true; // Show in QR menu
+  };
+
+  // Load first published kitchen by default
   useEffect(() => {
-    const published = kitchens.filter(k => k.IsPublished !== 1 && k.IsPublished !== true && k.IsPublished !== '1');
+    const published = kitchens.filter(k => isPublishedForQR(k.IsPublished));
     if (published.length > 0 && !selectedKitchenId) {
       setSelectedKitchenId(published[0].CategoryId);
     }
   }, [kitchens]);
 
   // Load groups for the selected Category
-  // FIX: Immediately reset selectedGroupId to null when kitchen changes, so we never
-  // filter by a stale group ID during the async fetchGroups gap.
   useEffect(() => {
-    if (!selectedKitchenId) return;
-    // Reset immediately so filteredDishes shows all dishes for this category
-    // while groups are loading, rather than showing nothing.
-    setSelectedGroupId(null);
-    setGroupsLoading(true);
-    fetchGroups(selectedKitchenId).then((groups) => {
-      const publishedGroups = groups.filter(g => g.IsPublished !== 1 && g.IsPublished !== true && g.IsPublished !== '1');
-      if (publishedGroups && publishedGroups.length > 0) {
-        setSelectedGroupId(publishedGroups[0].DishGroupId);
-      } else {
-        setSelectedGroupId(null);
-      }
-      setGroupsLoading(false);
-    }).catch(() => {
-      setGroupsLoading(false);
-    });
+    if (selectedKitchenId) {
+      fetchGroups(selectedKitchenId).then((groups) => {
+        const publishedGroups = groups.filter(g => isPublishedForQR(g.IsPublished));
+        setDishGroups(publishedGroups);
+        if (publishedGroups && publishedGroups.length > 0) {
+          setSelectedGroupId(publishedGroups[0].DishGroupId);
+        } else {
+          setSelectedGroupId(null);
+        }
+      });
+    }
   }, [selectedKitchenId]);
+
+  // 🔌 Real-time Socket Listener for Menu Updates (e.g. IsPublished toggle = 1 or 0)
+  useEffect(() => {
+    const { socket: sharedSocket } = require("../../constants/socket");
+
+    const handleMenuUpdated = (data: any) => {
+      console.log("⚡ [QR Menu] Socket event received: menu_updated", data);
+      forceRefreshMenu().then(() => {
+        if (selectedKitchenId) {
+          fetchGroups(selectedKitchenId).then((groups) => {
+            const publishedGroups = groups.filter(g => isPublishedForQR(g.IsPublished));
+            setDishGroups(publishedGroups);
+            if (publishedGroups && publishedGroups.length > 0 && (!selectedGroupId || !publishedGroups.some(g => g.DishGroupId === selectedGroupId))) {
+              setSelectedGroupId(publishedGroups[0].DishGroupId);
+            }
+          });
+        }
+      });
+    };
+
+    sharedSocket.on("menu_updated", handleMenuUpdated);
+
+    return () => {
+      sharedSocket.off("menu_updated", handleMenuUpdated);
+    };
+  }, [selectedKitchenId, selectedGroupId]);
 
   if (isSessionClosed) {
     // Check if it's a mobile browser (can't close tabs programmatically)
@@ -706,43 +711,57 @@ export default function CustomerMenuScreen() {
     );
   }
 
-  // FIX: Read groups directly from the Zustand store (always in sync with fetch state)
-  // instead of a local state copy that has a race condition window where it's still [].
-  const currentDishGroups: any[] = selectedKitchenId
-    ? (storeDishGroups[selectedKitchenId] || []).filter(
-        (g: any) => g.IsPublished !== 1 && g.IsPublished !== true && g.IsPublished !== '1'
-      )
-    : [];
+  // Live time ticker for auto dish disappearance/appearance based on AvailableTimeFrom/AvailableTimeTo
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 15000); // Check every 15s for live auto update
+    return () => clearInterval(timer);
+  }, []);
 
   const filteredDishes = allDishes.filter((dish: any) => {
-    // Hide if unpublished on Dish, Category, or Group level for QR only
     const isPub = dish.IsPublished !== undefined ? dish.IsPublished : dish.isPublished;
     const catPub = dish.CategoryPublished !== undefined ? dish.CategoryPublished : dish.categoryPublished;
     const grpPub = dish.GroupPublished !== undefined ? dish.GroupPublished : dish.groupPublished;
 
-    if (
-      isPub == 1 || isPub === true || String(isPub) === '1' ||
-      catPub == 1 || catPub === true || String(catPub) === '1' ||
-      grpPub == 1 || grpPub === true || String(grpPub) === '1'
-    ) {
+    // Exclude if IsPublished = 1 on Dish, Category, or Group level
+    if (!isPublishedForQR(isPub) || !isPublishedForQR(catPub) || !isPublishedForQR(grpPub)) {
+      return false;
+    }
+
+    // Hide if outside AvailableTimeFrom and AvailableTimeTo range
+    const timeFrom = dish.AvailableTimeFrom || dish.availableTimeFrom;
+    const timeTo = dish.AvailableTimeTo || dish.availableTimeTo;
+    if (!isDishAvailableNow(timeFrom, timeTo, currentTime)) {
       return false;
     }
 
     const query = search.trim().toLowerCase();
     if (query.length > 0) {
-      // When searching, show all matching dishes regardless of selected category/group
       const nameMatch = dish.Name?.toLowerCase().includes(query);
       const descMatch = dish.Description?.toLowerCase().includes(query);
       return nameMatch || descMatch;
     }
+    
+    // Check if dish matches group (either primary DishGroupId or via DishGroupMapping)
+    const matchesDishGroupId = (groupId: string) => {
+      if (!groupId) return false;
+      if (dish.DishGroupId === groupId) return true;
+      if (dish.MappedGroupIds) {
+        const mappedArr = String(dish.MappedGroupIds).split(',').map(s => s.trim()).filter(Boolean);
+        return mappedArr.includes(groupId);
+      }
+      return false;
+    };
 
-    // FIX: Use store-derived groups (always up-to-date) instead of stale local state
-    // Check if the dish's group belongs to the currently selected category
-    const belongsToCategory = currentDishGroups.some((g: any) => g.DishGroupId === dish.DishGroupId);
+    // Check if the dish belongs to any group in the currently selected category
+    const belongsToCategory = dishGroups.some(g => matchesDishGroupId(g.DishGroupId));
     
     // If a group is selected, match it; otherwise ensure it belongs to the selected category
     const matchesGroup = selectedGroupId
-      ? dish.DishGroupId === selectedGroupId
+      ? matchesDishGroupId(selectedGroupId)
       : belongsToCategory;
       
     return matchesGroup;
@@ -831,7 +850,7 @@ export default function CustomerMenuScreen() {
         <FlatList
           horizontal
           showsHorizontalScrollIndicator={false}
-          data={kitchens.filter(k => k.IsPublished !== 1 && k.IsPublished !== true && k.IsPublished !== '1')}
+          data={kitchens.filter(k => isPublishedForQR(k.IsPublished))}
           keyExtractor={(item) => item.CategoryId}
           renderItem={({ item }) => {
             const isSelected = selectedKitchenId === item.CategoryId;
@@ -851,12 +870,12 @@ export default function CustomerMenuScreen() {
       </View>
 
       {/* Horizontal Dish Group Pill Bar */}
-      {currentDishGroups.length > 0 && (
+      {dishGroups.length > 0 && (
         <View style={styles.groupsContainer}>
           <FlatList
             horizontal
             showsHorizontalScrollIndicator={false}
-            data={currentDishGroups}
+            data={dishGroups}
             keyExtractor={(item) => item.DishGroupId}
             renderItem={({ item }) => {
               const isSelected = selectedGroupId === item.DishGroupId;
@@ -877,7 +896,7 @@ export default function CustomerMenuScreen() {
       )}
 
       {/* Main Dishes Catalog */}
-      {(isLoading || groupsLoading) ? (
+      {isLoading ? (
         <ActivityIndicator size="large" color={Theme.primary} style={styles.loader} />
       ) : (
         <FlatList
@@ -1079,7 +1098,7 @@ export default function CustomerMenuScreen() {
                   <View>
                     <Text style={{ fontSize: 11, color: "#94A3B8", fontWeight: "700", textTransform: "uppercase" }}>Session Started</Text>
                     <Text style={{ fontSize: 14, fontWeight: "700", color: "#334155" }}>
-                      Today, {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      Today, {formatToSingaporeTime(new Date())}
                     </Text>
                   </View>
                 </View>

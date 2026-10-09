@@ -36,7 +36,10 @@ router.post('/download-pdf', async (req, res) => {
       console.error("Error reading active business day in export:", dbErr);
     }
     let endDateStr = startDateStr;
-    if (reportData.period) {
+    // For multi-day ranges, use the period dates from the frontend.
+    // For DAILY, always use the active business date from DateEntry
+    // so we don't accidentally query calendar-today (which has no settled data).
+    if (reportData.filterType !== 'DAILY' && reportData.period) {
       const dates = reportData.period.match(/\d{4}-\d{2}-\d{2}/g);
       if (dates && dates.length > 0) {
         startDateStr = dates[0];
@@ -44,7 +47,12 @@ router.post('/download-pdf', async (req, res) => {
       }
     }
 
-    const enrichedData = await fetchFullReportData(startDateStr, endDateStr, pool);
+    const cashierFilter = reportData.selectedCashierId || reportData.cashierId || (reportData.cashierName !== 'Whole Sales (All Users)' ? reportData.cashierName : undefined);
+    const enrichedData = await fetchFullReportData(startDateStr, endDateStr, pool, cashierFilter);
+
+    if (reportData.cashierName) {
+      enrichedData.cashierName = reportData.cashierName;
+    }
 
     const docDef = await generateSalesReportPdf(enrichedData);
     const pdfBuffer = await createPdfBinary(docDef);
@@ -206,7 +214,7 @@ router.post('/email-pdf', async (req, res) => {
     if (!reportData) {
       return res.status(400).json({ success: false, error: 'Report data is required' });
     }
-    if (reportData.period) {
+    if (reportData.filterType !== 'DAILY' && reportData.period) {
       const dates = reportData.period.match(/\d{4}-\d{2}-\d{2}/g);
       if (dates && dates.length > 0) {
         startDateStr = dates[0];
@@ -214,7 +222,12 @@ router.post('/email-pdf', async (req, res) => {
       }
     }
 
-    const enrichedData = await fetchFullReportData(startDateStr, endDateStr, pool);
+    const cashierFilter = reportData.selectedCashierId || reportData.cashierId || (reportData.cashierName !== 'Whole Sales (All Users)' ? reportData.cashierName : undefined);
+    const enrichedData = await fetchFullReportData(startDateStr, endDateStr, pool, cashierFilter);
+
+    if (reportData.cashierName) {
+      enrichedData.cashierName = reportData.cashierName;
+    }
 
     const recipientCheck = normalizeAndValidateRecipient(email);
     if (!recipientCheck.ok) {

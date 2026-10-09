@@ -107,12 +107,15 @@ export const CustomerDisplaySync = {
       const paymentSettings = usePaymentSettingsStore.getState().settings;
 
       const scPercentage = companySettings.serviceChargePercentage || 0;
-      const scRate = scPercentage / 100;
+      const twScPercentage = companySettings.twServiceChargePercentage || 0;
+      const isTakeawayOrder = orderContext?.orderType === "TAKEAWAY";
+      const scRate = isTakeawayOrder ? 0 : scPercentage / 100;
+      const twScRate = twScPercentage / 100;
       const gstRate = (gstPercentage || 0) / 100;
       const takeawayChargeVal = takeawayCharge || 0;
 
       // 1. Calculate totals matching cashier formulas
-      const { grossTotal, totalItemDiscount, scEligibleSubtotal } = cart.reduce(
+      const { grossTotal, totalItemDiscount, scEligibleSubtotal, twScEligibleSubtotal } = cart.reduce(
         (acc, item) => {
           const isVoided = item.status === "VOIDED" || item.StatusCode === 0 || item.statusCode === 0;
           if (isVoided) return acc;
@@ -133,16 +136,17 @@ export const CustomerDisplaySync = {
           }
 
           const itemSubtotal = baseTotal - itemDiscount;
-          const isTakeawayItem = item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway;
+          const isTakeawayItem = isTakeawayOrder || Boolean(item.isTakeaway || item.IsTakeaway || item.isTakeAway || item.IsTakeAway);
           const isSC = !isTakeawayItem && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true);
 
           return {
             grossTotal: acc.grossTotal + baseTotal,
             totalItemDiscount: acc.totalItemDiscount + itemDiscount,
             scEligibleSubtotal: acc.scEligibleSubtotal + (isSC ? itemSubtotal : 0),
+            twScEligibleSubtotal: acc.twScEligibleSubtotal + (isTakeawayItem ? itemSubtotal : 0),
           };
         },
-        { grossTotal: 0, totalItemDiscount: 0, scEligibleSubtotal: 0 }
+        { grossTotal: 0, totalItemDiscount: 0, scEligibleSubtotal: 0, twScEligibleSubtotal: 0 }
       );
 
       const subTotal = grossTotal - totalItemDiscount;
@@ -164,7 +168,13 @@ export const CustomerDisplaySync = {
         return Math.max(0, scEligibleSubtotal - proportion * orderDiscountAmount);
       })();
 
-      const serviceChargeAmount = scEligibleNet * scRate;
+      const twScEligibleNet = (() => {
+        if (subTotal <= 0) return 0;
+        const proportion = twScEligibleSubtotal / subTotal;
+        return Math.max(0, twScEligibleSubtotal - proportion * orderDiscountAmount);
+      })();
+
+      const serviceChargeAmount = (scEligibleNet * scRate) + (twScEligibleNet * twScRate);
       const taxableAmount = netAfterDiscount + serviceChargeAmount + takeawayChargeVal;
 
       const gstAmountRaw = taxableAmount * gstRate;

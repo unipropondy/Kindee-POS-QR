@@ -280,6 +280,7 @@ async function initDB(pool) {
     await runQuery("TableMaster - Pax", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[TableMaster]') AND name = 'Pax') ALTER TABLE [dbo].[TableMaster] ADD Pax INT NULL");
     await runQuery("TableMaster - PAYMENT_STATUS", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[TableMaster]') AND name = 'PAYMENT_STATUS') ALTER TABLE [dbo].[TableMaster] ADD PAYMENT_STATUS INT NULL");
 
+    await runQuery("TableMaster - Status type to INT", "IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[TableMaster]') AND name = 'Status' AND system_type_id = 104) BEGIN DECLARE @df VARCHAR(256); SELECT @df = name FROM sys.default_constraints WHERE parent_object_id = OBJECT_ID('TableMaster') AND parent_column_id = COLUMNPROPERTY(OBJECT_ID('TableMaster'), 'Status', 'ColumnId'); IF @df IS NOT NULL EXEC('ALTER TABLE TableMaster DROP CONSTRAINT ' + @df); ALTER TABLE TableMaster ALTER COLUMN Status INT NULL; END");
     await runQuery("Create OrderSequences", `
       IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[OrderSequences]') AND type in (N'U'))
       BEGIN
@@ -347,7 +348,29 @@ async function initDB(pool) {
     await runQuery("CompanySettings - ServiceChargePercentage", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CompanySettings]') AND name = 'ServiceChargePercentage') ALTER TABLE [dbo].[CompanySettings] ADD ServiceChargePercentage DECIMAL(18, 2) DEFAULT 0");
     await runQuery("CompanySettings - SVCIdentification", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CompanySettings]') AND name = 'SVCIdentification') ALTER TABLE [dbo].[CompanySettings] ADD SVCIdentification BIT NOT NULL DEFAULT 1");
     await runQuery("CompanySettings - TakeawayCharges", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CompanySettings]') AND name = 'TakeawayCharges') ALTER TABLE [dbo].[CompanySettings] ADD TakeawayCharges DECIMAL(18, 2) DEFAULT 0");
+    await runQuery("CompanySettings - TWServiceChargePercentage", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CompanySettings]') AND name = 'TWServiceChargePercentage') ALTER TABLE [dbo].[CompanySettings] ADD TWServiceChargePercentage DECIMAL(10, 2) NULL");
     await runQuery("CompanySettings - LastBridgeHeartbeat", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[CompanySettings]') AND name = 'LastBridgeHeartbeat') ALTER TABLE [dbo].[CompanySettings] ADD LastBridgeHeartbeat DATETIME");
+
+    // 11.1 SettingsAuditLog Table Schema
+    await runQuery("Create SettingsAuditLog", `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[SettingsAuditLog]') AND type in (N'U'))
+      BEGIN
+        CREATE TABLE [dbo].[SettingsAuditLog] (
+          [AuditId] UNIQUEIDENTIFIER DEFAULT NEWID() PRIMARY KEY,
+          [Category] NVARCHAR(50) NOT NULL,
+          [FieldName] NVARCHAR(100) NOT NULL,
+          [FieldLabel] NVARCHAR(100) NOT NULL,
+          [OldValue] NVARCHAR(MAX) NULL,
+          [NewValue] NVARCHAR(MAX) NULL,
+          [ModifiedBy] NVARCHAR(100) NOT NULL,
+          [UserId] NVARCHAR(50) NULL,
+          [UserRole] NVARCHAR(50) NULL,
+          [CreatedAt] DATETIME DEFAULT DATEADD(MINUTE, 480, GETUTCDATE())
+        );
+        CREATE INDEX IX_SettingsAuditLog_CreatedAt ON [dbo].[SettingsAuditLog](CreatedAt DESC);
+        CREATE INDEX IX_SettingsAuditLog_Category ON [dbo].[SettingsAuditLog](Category);
+      END
+    `);
     await runQuery("AppSettings - EnableCheckoutFlow", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableCheckoutFlow') ALTER TABLE [dbo].[AppSettings] ADD EnableCheckoutFlow BIT NOT NULL DEFAULT 1");
     await runQuery("AppSettings - EnableDirectProcessToPay", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableDirectProcessToPay') ALTER TABLE [dbo].[AppSettings] ADD EnableDirectProcessToPay BIT NOT NULL DEFAULT 0");
     await runQuery("AppSettings - EnableDirectPaymentToProcess", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[AppSettings]') AND name = 'EnableDirectPaymentToProcess') ALTER TABLE [dbo].[AppSettings] ADD EnableDirectPaymentToProcess BIT NOT NULL DEFAULT 0");
@@ -454,6 +477,34 @@ async function initDB(pool) {
           )
       END
     `);
+
+    // Upgrade: Add start_date column to PaymentTransactionDetails for business date alignment
+    await runQuery("Upgrade PaymentTransactionDetails - Add start_date", `
+      IF COL_LENGTH('dbo.PaymentTransactionDetails', 'start_date') IS NULL
+      BEGIN
+          ALTER TABLE [dbo].[PaymentTransactionDetails] ADD [start_date] DATE NULL
+      END
+    `);
+
+    // Backfill start_date for PaymentTransactionDetails
+    await runQuery("Backfill PaymentTransactionDetails start_date", `
+      UPDATE ptd
+      SET ptd.start_date = COALESCE(sh.start_date, CAST(sh.LastSettlementDate AS DATE))
+      FROM PaymentTransactionDetails ptd
+      JOIN SettlementHeader sh ON sh.SettlementID = ptd.ReferenceId
+      WHERE ptd.start_date IS NULL AND ptd.ReferenceType = 'BILL';
+
+      UPDATE ptd
+      SET ptd.start_date = cct.start_date
+      FROM PaymentTransactionDetails ptd
+      JOIN CustomerCreditTransactions cct ON cct.MemberId = ptd.ReferenceId AND cct.TransactionType = 'PAYMENT' AND cct.start_date IS NOT NULL
+      WHERE ptd.start_date IS NULL AND ptd.ReferenceType = 'MEMBER';
+
+      UPDATE PaymentTransactionDetails
+      SET start_date = CAST(CreatedDate AS DATE)
+      WHERE start_date IS NULL;
+    `);
+
 
     // 15. Create CustomerCreditTransactions table for credit and payment ledger history
     // Upgrade Detector: Drop old table format if missing new 'BillAmount' column
@@ -689,8 +740,144 @@ async function initDB(pool) {
       END
     `);
 
-    // 19. dishOrderItemShare updates
-    await runQuery("dishOrderItemShare - TargetAmount", "IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[dishOrderItemShare]') AND name = 'TargetAmount') ALTER TABLE [dbo].[dishOrderItemShare] ADD TargetAmount DECIMAL(18, 2) DEFAULT 0");
+    // Ensure start_date column exists across all settlement and sales tables
+    const tablesNeedingStartDate = [
+      'PaymentDetailCur',
+      'PaymentDetail',
+      'SettlementHeader',
+      'SettlementItemDetail',
+      'RestaurantInvoice',
+      'RestaurantInvoicecur',
+      'Restaurantorder',
+      'Restaurantordercur',
+      'Restaurantorderdetail',
+      'Restaurantorderdetailcur',
+      'CustomerCreditTransactions',
+      'Restaurantmodifierdetail',
+      'ArtistCashBox'
+    ];
+
+    for (const tbl of tablesNeedingStartDate) {
+      await runQuery(`${tbl} - start_date`, `
+        IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[${tbl}]') AND type in (N'U'))
+        AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[${tbl}]') AND name = 'start_date')
+        ALTER TABLE [dbo].[${tbl}] ADD [start_date] DATE NULL
+      `);
+    }
+
+    // Ensure Pax & related columns exist across all settlement and sales tables
+    const paxTables = [
+      'SettlementHeader',
+      'RestaurantInvoice',
+      'RestaurantInvoicecur',
+      'Restaurantorder',
+      'Restaurantordercur',
+      'TableMaster'
+    ];
+
+    for (const tbl of paxTables) {
+      await runQuery(`${tbl} - Pax`, `
+        IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[${tbl}]') AND type in (N'U'))
+        AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[${tbl}]') AND name = 'Pax')
+        ALTER TABLE [dbo].[${tbl}] ADD [Pax] INT NULL
+      `);
+    }
+
+    await runQuery("SettlementHeader - TotalPax", `
+      IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND type in (N'U'))
+      AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'TotalPax')
+      ALTER TABLE [dbo].[SettlementHeader] ADD [TotalPax] INT NULL
+    `);
+
+    await runQuery("SettlementHeader - GuestName", `
+      IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND type in (N'U'))
+      AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'GuestName')
+      ALTER TABLE [dbo].[SettlementHeader] ADD [GuestName] NVARCHAR(100) NULL
+    `);
+
+    await runQuery("SettlementHeader - TakeawayCharge", `
+      IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND type in (N'U'))
+      AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'TakeawayCharge')
+      ALTER TABLE [dbo].[SettlementHeader] ADD [TakeawayCharge] DECIMAL(18, 2) NULL DEFAULT 0
+    `);
+
+    await runQuery("SettlementHeader - VoidItemQty", `
+      IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND type in (N'U'))
+      AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'VoidItemQty')
+      ALTER TABLE [dbo].[SettlementHeader] ADD [VoidItemQty] DECIMAL(18, 3) NULL DEFAULT 0
+    `);
+
+    await runQuery("SettlementHeader - VoidItemAmount", `
+      IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND type in (N'U'))
+      AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[SettlementHeader]') AND name = 'VoidItemAmount')
+      ALTER TABLE [dbo].[SettlementHeader] ADD [VoidItemAmount] DECIMAL(18, 2) NULL DEFAULT 0
+    `);
+
+    // Ensure server and servermaster tables exist
+    await runQuery("Create server table", `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[server]') AND type in (N'U'))
+      BEGIN
+          CREATE TABLE [dbo].[server](
+              [SER_ID] [uniqueidentifier] NOT NULL PRIMARY KEY DEFAULT NEWID(),
+              [SER_NAME] [nvarchar](255) NOT NULL,
+              [CreatedBy] [uniqueidentifier] NULL,
+              [CreatedDate] [datetime] NULL DEFAULT GETDATE()
+          )
+      END
+    `);
+
+    await runQuery("Create servermaster table", `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[servermaster]') AND type in (N'U'))
+      BEGIN
+          CREATE TABLE [dbo].[servermaster](
+              [SER_ID] [uniqueidentifier] NOT NULL PRIMARY KEY DEFAULT NEWID(),
+              [SER_NAME] [nvarchar](255) NOT NULL,
+              [CreatedBy] [uniqueidentifier] NULL,
+              [CreatedDate] [datetime] NULL DEFAULT GETDATE()
+          )
+      END
+    `);
+
+    // Ensure IsSplitDish and IsGroupDish exist in DishMaster and Dish tables
+    const dishTables = ['DishMaster', 'Dish'];
+    for (const tbl of dishTables) {
+      await runQuery(`${tbl} - IsSplitDish`, `
+        IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[${tbl}]') AND type in (N'U'))
+        AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[${tbl}]') AND name = 'IsSplitDish')
+        ALTER TABLE [dbo].[${tbl}] ADD [IsSplitDish] INT NULL DEFAULT 0
+      `);
+
+      await runQuery(`${tbl} - IsGroupDish`, `
+        IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[${tbl}]') AND type in (N'U'))
+        AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[${tbl}]') AND name = 'IsGroupDish')
+        ALTER TABLE [dbo].[${tbl}] ADD [IsGroupDish] INT NULL DEFAULT 0
+      `);
+    }
+
+    // 19. dishOrderItemShare table creation and updates
+    await runQuery("Create dishOrderItemShare table", `
+      IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[dishOrderItemShare]') AND type in (N'U'))
+      BEGIN
+          CREATE TABLE [dbo].[dishOrderItemShare](
+              [Id] [uniqueidentifier] NOT NULL PRIMARY KEY DEFAULT NEWID(),
+              [CustomerName] [varchar](255) NULL,
+              [IsSelected] [bit] NULL DEFAULT 1,
+              [CreatedDate] [datetime] NULL DEFAULT GETDATE(),
+              [Amount] [decimal](18, 2) NULL DEFAULT 0,
+              [FromDate] [date] NULL,
+              [ToDate] [date] NULL,
+              [DishId] [uniqueidentifier] NULL,
+              [OrderDishId] [uniqueidentifier] NULL,
+              [TargetAmount] [decimal](18, 2) NULL DEFAULT 0
+          )
+      END
+    `);
+
+    await runQuery("dishOrderItemShare - TargetAmount", `
+      IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[dishOrderItemShare]') AND type in (N'U'))
+      AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[dishOrderItemShare]') AND name = 'TargetAmount')
+      ALTER TABLE [dbo].[dishOrderItemShare] ADD TargetAmount DECIMAL(18, 2) DEFAULT 0
+    `);
 
     // 19.1 Create DateEntry table for Day Start/Day End tracking
     await runQuery("Create DateEntry table", `
@@ -721,6 +908,40 @@ async function initDB(pool) {
           )
       END
     `);
+
+    // --- Automated schema sync from reference database UCSPONDY ---
+    try {
+      const ucsPondyCheck = await pool.request().query("SELECT 1 FROM sys.databases WHERE name = 'UCSPONDY'");
+      if (ucsPondyCheck.recordset.length > 0) {
+        const missingCols = await pool.request().query(`
+          SELECT 
+            src.TABLE_NAME, 
+            src.COLUMN_NAME, 
+            src.DATA_TYPE, 
+            src.CHARACTER_MAXIMUM_LENGTH, 
+            src.NUMERIC_PRECISION, 
+            src.NUMERIC_SCALE
+          FROM UCSPONDY.INFORMATION_SCHEMA.COLUMNS src
+          JOIN UCSSITARAS.INFORMATION_SCHEMA.TABLES tgt_tbl 
+            ON src.TABLE_NAME = tgt_tbl.TABLE_NAME AND tgt_tbl.TABLE_TYPE = 'BASE TABLE'
+          LEFT JOIN UCSSITARAS.INFORMATION_SCHEMA.COLUMNS tgt
+            ON src.TABLE_NAME = tgt.TABLE_NAME AND src.COLUMN_NAME = tgt.COLUMN_NAME
+          WHERE tgt.COLUMN_NAME IS NULL
+        `);
+
+        for (const col of missingCols.recordset) {
+          let typeDef = col.DATA_TYPE.toUpperCase();
+          if (['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR'].includes(typeDef)) {
+            typeDef += col.CHARACTER_MAXIMUM_LENGTH === -1 ? '(MAX)' : `(${col.CHARACTER_MAXIMUM_LENGTH || 255})`;
+          } else if (['DECIMAL', 'NUMERIC'].includes(typeDef)) {
+            typeDef += `(${col.NUMERIC_PRECISION || 18}, ${col.NUMERIC_SCALE || 2})`;
+          }
+          await runQuery(`Auto-Sync [${col.TABLE_NAME}].[${col.COLUMN_NAME}]`, `IF COL_LENGTH('dbo.${col.TABLE_NAME}', '${col.COLUMN_NAME}') IS NULL ALTER TABLE [dbo].[${col.TABLE_NAME}] ADD [${col.COLUMN_NAME}] ${typeDef} NULL`);
+        }
+      }
+    } catch (e) {
+      console.warn("[AutoSync] Cross-DB schema check warning:", e.message);
+    }
 
     // 19.3 Create BusinessDayAuditLog table for Day Start/End event audit log
     await runQuery("Create BusinessDayAuditLog table", `

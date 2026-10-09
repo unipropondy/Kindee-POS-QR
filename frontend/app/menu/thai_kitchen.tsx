@@ -45,6 +45,8 @@ import { useGeneralSettingsStore } from "../../stores/generalSettingsStore";
 import { useMenuStore } from "../../stores/menuStore";
 import { useOrderContextStore } from "../../stores/orderContextStore";
 import { usePaymentSettingsStore } from "../../stores/paymentSettingsStore";
+import { useCompanySettingsStore } from "../../stores/companySettingsStore";
+import { useBarcodeScanner } from "../../hooks/useBarcodeScanner";
 
 const EMPTY_ARRAY: any[] = [];
 
@@ -224,7 +226,10 @@ const DishCard = React.memo(
             isPhone ? { fontSize: 12 } : isTablet ? { fontSize: 14 } : null,
           ]}
         >
-          {(Number(dish.IsOpenItem) === 1 || dish.IsOpenItem === true || dish.IsOpenItem === 'true' || dish.IsOpenItem === '1') ? "Open Price" : `$${(dish.Price || 0).toFixed(2)}`}
+          {(() => {
+            const currencySymbol = useCompanySettingsStore.getState().settings.currencySymbol || "$";
+            return (Number(dish.IsOpenItem) === 1 || dish.IsOpenItem === true || dish.IsOpenItem === 'true' || dish.IsOpenItem === '1') ? "Open Price" : `${currencySymbol}${(dish.Price || 0).toFixed(2)}`;
+          })()}
         </Text>
         {isSoldOut ? (
           <View style={{ backgroundColor: "#EF444422", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, marginTop: 2, borderWidth: 1, borderColor: "#EF444444", alignSelf: "center" }}>
@@ -424,6 +429,8 @@ export default function MenuScreen() {
   const [showReprintOptions, setShowReprintOptions] = useState(false);
   const { showToast } = useToast();
   const user = useAuthStore((s: any) => s.user);
+
+
   const paymentSettings = usePaymentSettingsStore((s: any) => s.settings);
 
   const orderContext = useOrderContextStore((state) => state.currentOrder);
@@ -1005,6 +1012,20 @@ export default function MenuScreen() {
     },
     [selectedKitchenId, kitchens, modifierCache],
   );
+
+  // ─── 🔲 BARCODE SCANNER INTEGRATION ───────────────────────────────────────
+  // Scans barcode -> triggers openModifiers(dish).
+  // If item has modifiers/combos/options -> pops up modifier modal!
+  // If simple item -> adds to cart immediately.
+  useBarcodeScanner({
+    onSuccess: (dish: any) => {
+      openModifiers(dish);
+    },
+    onError: (msg: string) => {
+      showToast({ type: 'error', message: msg, duration: 2500 });
+    },
+  });
+  // ──────────────────────────────────────────────────────────────────────────
 
   // Group modifiers dynamically
   const groupedModifiers = React.useMemo(() => {

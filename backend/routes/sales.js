@@ -1,9 +1,34 @@
 const express = require("express");
 const router = express.Router();
+const { poolPromise } = require("../config/db");
+// Public payment-methods endpoint: returns all active paymodes from dbo.Paymode
+router.get("/payment-methods", async (req, res) => {
+    try {
+      const pool = await poolPromise;
+      const result = await pool.request().query(`
+        SELECT 
+          RTRIM(LTRIM(PayMode))       as payMode,
+          RTRIM(LTRIM(Description))   as description,
+          Position,
+          Active        as active,
+          DeviceSN,
+          DeviceSalt,
+          YeahPayEnabled,
+          ISNULL(Commission, 0)      as commission,
+          ISNULL(ServiceCharge, 0)   as serviceCharge,
+          ISNULL(IsEntertainment, 0) as isEntertainment,
+          ISNULL(IsVoucher, 0)       as isVoucher
+        FROM [dbo].[Paymode] 
+        ORDER BY Position ASC
+      `);
+      res.json(result.recordset || []);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+});
+
 const { authenticateToken } = require("../middleware/auth");
 router.use(authenticateToken);
-
-const { poolPromise } = require("../config/db");
 
 router.use(async (req, res, next) => {
   // Pass through query params untouched from client
@@ -25,7 +50,7 @@ const generateRandomBillId = () => {
 };
 
 const normalizeReportPayModeSql = (columnName = "sts.PayMode", settlementIdColumn = "sh.SettlementID") => {
-  const resolvedPayMode = `COALESCE((
+  const resolvedPayMode = `COALESCE(NULLIF(LTRIM(RTRIM(${columnName})), ''), (
     SELECT TOP 1 LTRIM(RTRIM(pd2.Remarks))
     FROM (
       SELECT Remarks, RestaurantBillId FROM PaymentDetailCur WHERE Remarks IS NOT NULL AND LTRIM(RTRIM(Remarks)) <> ''
@@ -33,11 +58,11 @@ const normalizeReportPayModeSql = (columnName = "sts.PayMode", settlementIdColum
       SELECT Remarks, RestaurantBillId FROM PaymentDetail WHERE Remarks IS NOT NULL AND LTRIM(RTRIM(Remarks)) <> ''
     ) pd2
     WHERE pd2.RestaurantBillId = ${settlementIdColumn}
-  ), ${columnName})`;
+  ))`;
 
   const rawSql = `
     UPPER(ISNULL(
-      (SELECT TOP 1 LTRIM(RTRIM(Description)) 
+      (SELECT TOP 1 LTRIM(RTRIM(COALESCE(NULLIF(LTRIM(RTRIM(Description)), ''), PayMode))) 
        FROM Paymode pm 
        WHERE LTRIM(RTRIM(pm.PayMode)) = LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))
           OR LTRIM(RTRIM(pm.Description)) = LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))
@@ -46,13 +71,14 @@ const normalizeReportPayModeSql = (columnName = "sts.PayMode", settlementIdColum
       CASE
         WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('YEAHPAY PAYNOW', '7') OR UPPER(${resolvedPayMode}) LIKE '%YEAHPAY%PAYNOW%' THEN 'YEAHPAY PAYNOW'
         WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('YEAHPAY CARD', '8') OR UPPER(${resolvedPayMode}) LIKE '%YEAHPAY%CARD%' THEN 'YEAHPAY CARD'
-        WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('CAS', 'CASH', '', '1') THEN 'CASH'
+        WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('CAS', 'CASH', '1') THEN 'CASH'
         WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('CARD', 'VISA', 'MASTER', 'MASTERCARD', 'AMEX', 'DINERS') THEN 'CARD'
         WHEN (UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('PAYNOW', '3') OR UPPER(${resolvedPayMode}) LIKE '%PAYNOW%') AND UPPER(${resolvedPayMode}) NOT LIKE '%YEAHPAY%' THEN 'PAYNOW'
         WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('GRAB', '10') OR UPPER(${resolvedPayMode}) LIKE '%GRAB%' THEN 'GRAB'
         WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('FOODPANDA', '9') OR UPPER(${resolvedPayMode}) LIKE '%FOODPANDA%' THEN 'FOODPANDA'
         WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('NETS', '2') OR UPPER(${resolvedPayMode}) LIKE '%NETS%' THEN 'NETS'
-        WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('UPI', '4') OR UPPER(${resolvedPayMode}) LIKE '%UPI%' OR UPPER(${resolvedPayMode}) LIKE '%GPAY%' THEN 'UPI'
+        WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('FOC', '4') OR UPPER(${resolvedPayMode}) LIKE '%FOC%' THEN 'FOC'
+        WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('UPI') OR UPPER(${resolvedPayMode}) LIKE '%UPI%' OR UPPER(${resolvedPayMode}) LIKE '%GPAY%' THEN 'UPI'
         WHEN UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, '')))) IN ('MEMBER', '5') OR UPPER(${resolvedPayMode}) LIKE '%MEMBER%' THEN 'MEMBER'
         ELSE UPPER(LTRIM(RTRIM(ISNULL(${resolvedPayMode}, 'CASH'))))
       END
@@ -91,9 +117,13 @@ const resolveBusinessDateColumn = (col) => {
     const prefix = cleanCol.includes(".") ? cleanCol.split(".")[0] + "." : "";
     return `COALESCE(${prefix}start_date, ${prefix}LastSettlementDate)`;
   }
-  if (cleanCol.includes("ptd.CreatedDate") || cleanCol.includes("ptd.CreatedOn")) {
+  if (cleanCol.includes("ptd.")) {
     const prefix = cleanCol.includes(".") ? cleanCol.split(".")[0] + "." : "";
-    return `COALESCE(${prefix}start_date, ${prefix}CreatedDate, ${prefix}CreatedOn)`;
+    return `COALESCE(${prefix}start_date, ${prefix}CreatedDate)`;
+  }
+  if (cleanCol.includes("cct.")) {
+    const prefix = cleanCol.includes(".") ? cleanCol.split(".")[0] + "." : "";
+    return `COALESCE(${prefix}start_date, ${prefix}CreatedDate)`;
   }
   if (cleanCol.includes("InvoiceDate")) {
     const prefix = cleanCol.includes(".") ? cleanCol.split(".")[0] + "." : "";
@@ -103,8 +133,6 @@ const resolveBusinessDateColumn = (col) => {
 };
 
 const getReportDateWhereSql = (filter = "daily", saleDateColumn = "sh.LastSettlementDate", date = null, startDate = null, endDate = null) => {
-  saleDateColumn = resolveBusinessDateColumn(saleDateColumn);
-
   if (String(filter).toLowerCase() === "custom" && startDate && endDate) {
     return getReportDateWhereSqlForRange(startDate, endDate, saleDateColumn);
   }
@@ -112,6 +140,23 @@ const getReportDateWhereSql = (filter = "daily", saleDateColumn = "sh.LastSettle
   const targetDate = date ? `'${date}'` : 'GETDATE()';
   const safeTargetDate = `CAST(CAST(${targetDate} AS DATETIME) AS DATE)`;
 
+  const cleanCol = String(saleDateColumn).trim();
+  if (cleanCol.includes("LastSettlementDate")) {
+    const prefix = cleanCol.includes(".") ? cleanCol.split(".")[0] + "." : "";
+    switch (String(filter).toLowerCase()) {
+      case "weekly":
+        return `((CAST(${prefix}start_date AS DATE) >= DATEADD(DAY, -6, ${safeTargetDate}) AND CAST(${prefix}start_date AS DATE) <= ${safeTargetDate}) OR (CAST(${prefix}LastSettlementDate AS DATE) >= DATEADD(DAY, -6, ${safeTargetDate}) AND CAST(${prefix}LastSettlementDate AS DATE) <= ${safeTargetDate}))`;
+      case "monthly":
+        return `((MONTH(CAST(${prefix}start_date AS DATE)) = MONTH(${safeTargetDate}) AND YEAR(CAST(${prefix}start_date AS DATE)) = YEAR(${safeTargetDate})) OR (MONTH(CAST(${prefix}LastSettlementDate AS DATE)) = MONTH(${safeTargetDate}) AND YEAR(CAST(${prefix}LastSettlementDate AS DATE)) = YEAR(${safeTargetDate})))`;
+      case "yearly":
+        return `((CAST(${prefix}start_date AS DATE) >= DATEADD(YEAR, -1, ${safeTargetDate}) AND CAST(${prefix}start_date AS DATE) <= ${safeTargetDate}) OR (CAST(${prefix}LastSettlementDate AS DATE) >= DATEADD(YEAR, -1, ${safeTargetDate}) AND CAST(${prefix}LastSettlementDate AS DATE) <= ${safeTargetDate}))`;
+      case "daily":
+      default:
+        return `(CAST(${prefix}start_date AS DATE) = ${safeTargetDate} OR CAST(${prefix}LastSettlementDate AS DATE) = ${safeTargetDate})`;
+    }
+  }
+
+  saleDateColumn = resolveBusinessDateColumn(saleDateColumn);
   switch (String(filter).toLowerCase()) {
     case "weekly":
       return `CAST(${saleDateColumn} AS DATE) >= DATEADD(DAY, -6, ${safeTargetDate}) AND CAST(${saleDateColumn} AS DATE) <= ${safeTargetDate}`;
@@ -126,10 +171,15 @@ const getReportDateWhereSql = (filter = "daily", saleDateColumn = "sh.LastSettle
 };
 
 const getReportDateWhereSqlForRange = (startDateStr, endDateStr, saleDateColumn = "sh.LastSettlementDate") => {
-  saleDateColumn = resolveBusinessDateColumn(saleDateColumn);
   const sgtStart = `CAST('${startDateStr}' AS DATE)`;
   const sgtEnd = `CAST('${endDateStr}' AS DATE)`;
-  return `CAST(${saleDateColumn} AS DATE) >= ${sgtStart} AND CAST(${saleDateColumn} AS DATE) <= ${sgtEnd}`;
+  const cleanCol = String(saleDateColumn).trim();
+  if (cleanCol.includes("LastSettlementDate")) {
+    const prefix = cleanCol.includes(".") ? cleanCol.split(".")[0] + "." : "";
+    return `((CAST(${prefix}start_date AS DATE) >= ${sgtStart} AND CAST(${prefix}start_date AS DATE) <= ${sgtEnd}) OR (CAST(${prefix}LastSettlementDate AS DATE) >= ${sgtStart} AND CAST(${prefix}LastSettlementDate AS DATE) <= ${sgtEnd}))`;
+  }
+  const resolved = resolveBusinessDateColumn(saleDateColumn);
+  return `CAST(${resolved} AS DATE) >= ${sgtStart} AND CAST(${resolved} AS DATE) <= ${sgtEnd}`;
 };
 
 const normalizeReportFilter = (filter = "daily") => {
@@ -162,12 +212,12 @@ const normalizePayMode = (paymentMethod = "CASH") => {
   if (raw === "PAYNOW" || raw === "3") return "PAYNOW";
   if (raw === "GRAB"  || raw === "10") return "GRAB";
   if (raw === "FOODPANDA" || raw === "9") return "FOODPANDA";
-  if (raw === "UPI"   || raw === "4" || raw === "GPAY" || raw === "PAYTM" || raw.startsWith("PHONE")) return "UPI";
+  if (raw === "UPI"   || raw === "GPAY" || raw === "PAYTM" || raw.startsWith("PHONE")) return "UPI";
   if (raw === "NETS"  || raw === "2") return "NETS";
   if (raw === "MEMBER" || raw === "5") return "MEMBER";
   if (raw === "CREDIT" || raw === "6") return "CREDIT";
   if (raw === "LEDGER" || raw === "LEDGER CREDIT") return "LEDGER";
-  if (raw === "FOC") return "FOC";
+  if (raw === "FOC" || raw === "4" || raw.includes("FREE OF CHARGE")) return "FOC";
 
   // Unknown mode — pass through as-is so it is stored verbatim in the DB
   return raw;
@@ -184,6 +234,58 @@ const DEFAULT_GUID = "00000000-0000-0000-0000-000000000000";
 
 const sanitizeGuid = (value, fallback = DEFAULT_GUID) => {
   return toGuidOrNull(value) || fallback;
+};
+
+const resolveCashierUserId = async (poolOrTx, inputCashierId) => {
+  try {
+    const textVal = String(inputCashierId || "").trim();
+
+    // 1. If valid GUID, check if exists in UserMaster
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(textVal)) {
+      const req1 = poolOrTx.request();
+      req1.input("GuidVal", sql.UniqueIdentifier, textVal);
+      const res1 = await req1.query("SELECT TOP 1 UserId FROM UserMaster WHERE UserId = @GuidVal");
+      if (res1.recordset.length > 0) {
+        return res1.recordset[0].UserId;
+      }
+    }
+
+    // 2. If username, usercode, or fullname passed (e.g. "admin", "123", "javi", "owner", "javith")
+    if (textVal && textVal !== "0" && textVal !== "00000000-0000-0000-0000-000000000000") {
+      const req2 = poolOrTx.request();
+      req2.input("StrVal", sql.NVarChar(100), textVal);
+      const res2 = await req2.query(`
+        SELECT TOP 1 UserId FROM UserMaster 
+        WHERE LOWER(LTRIM(RTRIM(UserName))) = LOWER(LTRIM(RTRIM(@StrVal)))
+           OR LOWER(LTRIM(RTRIM(UserCode))) = LOWER(LTRIM(RTRIM(@StrVal)))
+           OR LOWER(LTRIM(RTRIM(FullName))) = LOWER(LTRIM(RTRIM(@StrVal)))
+      `);
+      if (res2.recordset.length > 0) {
+        return res2.recordset[0].UserId;
+      }
+    }
+
+    // 3. Fallback: Get active admin/cashier user from UserMaster so CashierId is NEVER empty!
+    const reqFallback = poolOrTx.request();
+    const fallbackRes = await reqFallback.query(`
+      SELECT TOP 1 UserId FROM UserMaster 
+      WHERE UserGroupId = 'DFCF23EE-F6F4-4885-8D26-0056C657595F' OR UserGroupId = 'E6EAA22D-44ED-420F-96CA-5468F0D25DB4'
+      ORDER BY CreatedDate ASC
+    `);
+    if (fallbackRes.recordset.length > 0) {
+      return fallbackRes.recordset[0].UserId;
+    }
+
+    const anyUserRes = await poolOrTx.request().query("SELECT TOP 1 UserId FROM UserMaster ORDER BY CreatedDate ASC");
+    if (anyUserRes.recordset.length > 0) {
+      return anyUserRes.recordset[0].UserId;
+    }
+
+    return DEFAULT_GUID;
+  } catch (err) {
+    console.error("Error resolving cashier user ID:", err);
+    return DEFAULT_GUID;
+  }
 };
 
 const validateSalePayload = ({ totalAmount, paymentMethod, items, payments }) => {
@@ -259,6 +361,7 @@ router.get("/all", async (req, res) => {
              sh.CashierId, 
              sh.BillNo, 
              sh.SER_NAME,
+             ISNULL(um.FullName, ISNULL(um.UserName, 'Unknown')) AS CashierName,
              ${normalizeReportPayModeSql("sts.PayMode")} as PayMode,
              ISNULL(sts.SysAmount, sh.SysAmount) as SysAmount,
              ISNULL(sts.ManualAmount, sh.ManualAmount) as ManualAmount,
@@ -285,7 +388,13 @@ router.get("/all", async (req, res) => {
              NULL AS CreditOrderNo,
              sh.GuestName as GuestName,
              sh.Pax as Pax,
-             COALESCE(sh.entry_status, ro.entry_status) AS entryStatus
+             COALESCE(sh.entry_status, ro.entry_status) AS entryStatus,
+             COALESCE(mm.Phone, ccm.Phone, mm_sale.Phone, ccm_sale.Phone) AS CustomerPhone,
+             CASE 
+               WHEN mm.MemberId IS NOT NULL OR mm_sale.MemberId IS NOT NULL THEN 'MEMBER'
+               WHEN ccm.CustomerId IS NOT NULL OR ccm_sale.CustomerId IS NOT NULL THEN 'CREDIT'
+               ELSE NULL
+             END AS CustomerType
            FROM SettlementHeader sh
            LEFT JOIN RestaurantOrderCur ro ON sh.BillNo = ro.OrderNumber
            LEFT JOIN (
@@ -299,52 +408,63 @@ router.get("/all", async (req, res) => {
            LEFT JOIN CreditCustomerMaster ccm ON sh.MemberId = ccm.CustomerId
            LEFT JOIN MemberMaster mm_sale ON cct_sale.MemberId = mm_sale.MemberId
            LEFT JOIN CreditCustomerMaster ccm_sale ON cct_sale.MemberId = ccm_sale.CustomerId
+           LEFT JOIN UserMaster um ON TRY_CAST(sh.CashierId AS UNIQUEIDENTIFIER) = um.UserId
            WHERE ${shWhere}
- 
+
            UNION ALL
- 
+
            SELECT 
              cct.TransactionId AS SettlementID,
              cct.CreatedDate AS SettlementDate,
-             CAST(cct.CreatedDate AS DATE) AS BusinessDate,
-             CASE WHEN mm.MemberId IS NOT NULL THEN 'Member Payment Collected' ELSE 'Credit Payment Collected' END AS OrderId,
+             COALESCE(cct.start_date, CAST(cct.CreatedDate AS DATE)) AS BusinessDate,
+             CASE 
+               WHEN cct.CustomerType = 'CREDIT' THEN 'Credit Payment Collected'
+               WHEN cct.CustomerType = 'MEMBER' THEN 'Member Payment Collected'
+               WHEN m.CustomerId IS NOT NULL THEN 'Credit Payment Collected'
+               WHEN mm.MemberId IS NOT NULL THEN 'Member Payment Collected'
+               ELSE 'Credit Payment Collected'
+             END AS OrderId,
              'LEDGER' AS OrderType,
              'LEDGER' AS TableNo,
-             COALESCE(mm.Name, m.Name, 'Customer') AS Section,
-            CAST(cct.CreatedBy AS VARCHAR(50)) AS CashierId,
-            cct.Remarks AS BillNo,
-            'Cashier' AS SER_NAME,
-            cct.PaymentMethod AS PayMode,
-            cct.PaidAmount AS SysAmount,
-            cct.PaidAmount AS ManualAmount,
-            cct.PaidAmount AS SubTotal,
-            0 AS DiscountAmount,
-            NULL AS DiscountType,
-            0 AS ServiceCharge,
-            0 AS TotalTax,
-            0 AS TakeawayCharge,
-            1 AS ReceiptCount,
-            0 AS VoidQty,
-            0 AS VoidAmount,
-            0 AS IsCancelled,
-            NULL AS CancellationReason,
-            NULL AS CancelledDate,
-            NULL AS CancelledByUserName,
-            NULL AS MasterOrderId,
-            0 AS TotalDiscountAmount,
-            0 AS TotalLineItemDiscountAmount,
-            0 AS RoundedBy,
-            0 AS DiscountPercentage,
-            0 AS OutstandingAmount,
-            COALESCE(mm.Name, m.Name) AS CustomerName,
+             COALESCE(m.Name, mm.Name, 'Customer') AS Section,
+             CAST(cct.CreatedBy AS VARCHAR(50)) AS CashierId,
+             cct.Remarks AS BillNo,
+             'Cashier' AS SER_NAME,
+             ISNULL(um.FullName, ISNULL(um.UserName, 'Unknown')) AS CashierName,
+             cct.PaymentMethod AS PayMode,
+             cct.PaidAmount AS SysAmount,
+             cct.PaidAmount AS ManualAmount,
+             cct.PaidAmount AS SubTotal,
+             0 AS DiscountAmount,
+             NULL AS DiscountType,
+             0 AS ServiceCharge,
+             0 AS TotalTax,
+             0 AS TakeawayCharge,
+             1 AS ReceiptCount,
+             0 AS VoidQty,
+             0 AS VoidAmount,
+             0 AS IsCancelled,
+             NULL AS CancellationReason,
+             NULL AS CancelledDate,
+             NULL AS CancelledByUserName,
+             NULL AS MasterOrderId,
+             0 AS TotalDiscountAmount,
+             0 AS TotalLineItemDiscountAmount,
+             0 AS RoundedBy,
+             0 AS DiscountPercentage,
+             0 AS OutstandingAmount,
+             COALESCE(m.Name, mm.Name) AS CustomerName,
              (SELECT TOP 1 tx.BillNo FROM CustomerCreditAllocations cca JOIN CustomerCreditTransactions tx ON cca.InvoiceTransactionId = tx.TransactionId WHERE cca.PaymentTransactionId = cct.TransactionId) AS CreditOrderNo,
-            NULL AS GuestName,
-            NULL AS Pax,
-            NULL AS entryStatus
-          FROM CustomerCreditTransactions cct
-          LEFT JOIN CreditCustomerMaster m ON cct.MemberId = m.CustomerId
-          LEFT JOIN MemberMaster mm ON cct.MemberId = mm.MemberId
-          WHERE cct.TransactionType = 'PAYMENT' AND ${cctWhere}
+             COALESCE(m.Name, mm.Name) AS GuestName,
+             NULL AS Pax,
+             NULL AS entryStatus,
+             COALESCE(m.Phone, mm.Phone) AS CustomerPhone,
+             ISNULL(cct.CustomerType, CASE WHEN m.CustomerId IS NOT NULL THEN 'CREDIT' ELSE 'MEMBER' END) AS CustomerType
+           FROM CustomerCreditTransactions cct
+           LEFT JOIN CreditCustomerMaster m ON cct.MemberId = m.CustomerId AND (cct.CustomerType = 'CREDIT' OR cct.CustomerType IS NULL)
+           LEFT JOIN MemberMaster mm ON cct.MemberId = mm.MemberId AND (cct.CustomerType = 'MEMBER' OR (cct.CustomerType IS NULL AND m.CustomerId IS NULL))
+           LEFT JOIN UserMaster um ON TRY_CAST(cct.CreatedBy AS UNIQUEIDENTIFIER) = um.UserId
+           WHERE cct.TransactionType = 'PAYMENT' AND ${cctWhere}
         ) CombinedSales
         ORDER BY SettlementDate DESC
       `;
@@ -362,6 +482,7 @@ router.get("/all", async (req, res) => {
              sh.CashierId, 
              sh.BillNo, 
              sh.SER_NAME,
+             ISNULL(um.FullName, ISNULL(um.UserName, 'Unknown')) AS CashierName,
              ${normalizeReportPayModeSql("sts.PayMode")} as PayMode,
              ISNULL(sts.SysAmount, sh.SysAmount) as SysAmount,
              ISNULL(sts.ManualAmount, sh.ManualAmount) as ManualAmount,
@@ -388,7 +509,13 @@ router.get("/all", async (req, res) => {
              NULL AS CreditOrderNo,
              sh.GuestName as GuestName,
              sh.Pax as Pax,
-             COALESCE(sh.entry_status, ro.entry_status) AS entryStatus
+             COALESCE(sh.entry_status, ro.entry_status) AS entryStatus,
+             COALESCE(mm.Phone, ccm.Phone, mm_sale.Phone, ccm_sale.Phone) AS CustomerPhone,
+             CASE 
+               WHEN mm.MemberId IS NOT NULL OR mm_sale.MemberId IS NOT NULL THEN 'MEMBER'
+               WHEN ccm.CustomerId IS NOT NULL OR ccm_sale.CustomerId IS NOT NULL THEN 'CREDIT'
+               ELSE NULL
+             END AS CustomerType
            FROM SettlementHeader sh
            LEFT JOIN RestaurantOrderCur ro ON sh.BillNo = ro.OrderNumber
            LEFT JOIN (
@@ -402,21 +529,29 @@ router.get("/all", async (req, res) => {
            LEFT JOIN CreditCustomerMaster ccm ON sh.MemberId = ccm.CustomerId
            LEFT JOIN MemberMaster mm_sale ON cct_sale.MemberId = mm_sale.MemberId
            LEFT JOIN CreditCustomerMaster ccm_sale ON cct_sale.MemberId = ccm_sale.CustomerId
+           LEFT JOIN UserMaster um ON TRY_CAST(sh.CashierId AS UNIQUEIDENTIFIER) = um.UserId
  
            UNION ALL
  
            SELECT 
              cct.TransactionId AS SettlementID,
              cct.CreatedDate AS SettlementDate,
-             CAST(cct.CreatedDate AS DATE) AS BusinessDate,
-             CASE WHEN mm.MemberId IS NOT NULL THEN 'Member Payment Collected' ELSE 'Credit Payment Collected' END AS OrderId,
+             COALESCE(cct.start_date, CAST(cct.CreatedDate AS DATE)) AS BusinessDate,
+             CASE 
+               WHEN cct.CustomerType = 'CREDIT' THEN 'Credit Payment Collected'
+               WHEN cct.CustomerType = 'MEMBER' THEN 'Member Payment Collected'
+               WHEN m.CustomerId IS NOT NULL THEN 'Credit Payment Collected'
+               WHEN mm.MemberId IS NOT NULL THEN 'Member Payment Collected'
+               ELSE 'Credit Payment Collected'
+             END AS OrderId,
              'LEDGER' AS OrderType,
              'LEDGER' AS TableNo,
-             COALESCE(mm.Name, m.Name, 'Customer') AS Section,
+             COALESCE(m.Name, mm.Name, 'Customer') AS Section,
              CAST(cct.CreatedBy AS VARCHAR(50)) AS CashierId,
             cct.Remarks AS BillNo,
             'Cashier' AS SER_NAME,
-            cct.PaymentMethod AS PayMode,
+             ISNULL(um.FullName, ISNULL(um.UserName, 'Unknown')) AS CashierName,
+             cct.PaymentMethod AS PayMode,
             cct.PaidAmount AS SysAmount,
             cct.PaidAmount AS ManualAmount,
             cct.PaidAmount AS SubTotal,
@@ -438,16 +573,19 @@ router.get("/all", async (req, res) => {
             0 AS RoundedBy,
             0 AS DiscountPercentage,
             0 AS OutstandingAmount,
-            COALESCE(mm.Name, m.Name) AS CustomerName,
+            COALESCE(m.Name, mm.Name) AS CustomerName,
              (SELECT TOP 1 tx.BillNo FROM CustomerCreditAllocations cca JOIN CustomerCreditTransactions tx ON cca.InvoiceTransactionId = tx.TransactionId WHERE cca.PaymentTransactionId = cct.TransactionId) AS CreditOrderNo,
-            NULL AS GuestName,
+            COALESCE(m.Name, mm.Name) AS GuestName,
             NULL AS Pax,
-            NULL AS entryStatus
+            NULL AS entryStatus,
+            COALESCE(m.Phone, mm.Phone) AS CustomerPhone,
+            ISNULL(cct.CustomerType, CASE WHEN m.CustomerId IS NOT NULL THEN 'CREDIT' ELSE 'MEMBER' END) AS CustomerType
           FROM CustomerCreditTransactions cct
-          LEFT JOIN CreditCustomerMaster m ON cct.MemberId = m.CustomerId
-          LEFT JOIN MemberMaster mm ON cct.MemberId = mm.MemberId
-          WHERE cct.TransactionType = 'PAYMENT'
-        ) CombinedSales
+          LEFT JOIN CreditCustomerMaster m ON cct.MemberId = m.CustomerId AND (cct.CustomerType = 'CREDIT' OR cct.CustomerType IS NULL)
+          LEFT JOIN MemberMaster mm ON cct.MemberId = mm.MemberId AND (cct.CustomerType = 'MEMBER' OR (cct.CustomerType IS NULL AND m.CustomerId IS NULL))
+           LEFT JOIN UserMaster um ON TRY_CAST(cct.CreatedBy AS UNIQUEIDENTIFIER) = um.UserId
+           WHERE cct.TransactionType = 'PAYMENT'
+         ) CombinedSales
         ORDER BY SettlementDate DESC
       `;
     }
@@ -739,13 +877,17 @@ router.get("/detail/:id/payments", async (req, res) => {
           ptd.PayModeId,
           ptd.Amount,
           ptd.ReferenceNo,
-          COALESCE(pm.Description, pm.PayMode) AS PayModeName
+          COALESCE(NULLIF(LTRIM(RTRIM(pm.Description)), ''), LTRIM(RTRIM(pm.PayMode)), 'CASH') AS PayModeName
         FROM PaymentTransactionDetails ptd
         LEFT JOIN Paymode pm ON pm.Position = ptd.PayModeId
         WHERE ptd.ReferenceId = @Id AND ptd.ReferenceType = 'BILL'
       `);
     
-    let payments = result.recordset || [];
+    let payments = (result.recordset || []).map(row => ({
+      ...row,
+      PayModeName: (row.PayModeName && row.PayModeName.trim()) ? row.PayModeName.trim() : 'CASH'
+    }));
+
     if (payments.length === 0) {
       // Fallback 1: Query PaymentDetailCur / PaymentDetail to see if there is a single payment mode recorded
       const pdResult = await pool.request()
@@ -754,7 +896,7 @@ router.get("/detail/:id/payments", async (req, res) => {
           SELECT 
             pd.RestaurantBillId AS ReferenceId,
             pd.Amount,
-            COALESCE(pm.Description, pm.PayMode) AS PayModeName
+            COALESCE(NULLIF(LTRIM(RTRIM(pm.Description)), ''), LTRIM(RTRIM(pm.PayMode)), 'CASH') AS PayModeName
           FROM PaymentDetailCur pd
           LEFT JOIN Paymode pm ON pd.Paymode = pm.Position
           WHERE pd.RestaurantBillId = @Id
@@ -768,7 +910,7 @@ router.get("/detail/:id/payments", async (req, res) => {
           PayModeId: null,
           Amount: row.Amount,
           ReferenceNo: null,
-          PayModeName: row.PayModeName ? row.PayModeName.trim() : 'CASH'
+          PayModeName: (row.PayModeName && row.PayModeName.trim()) ? row.PayModeName.trim() : 'CASH'
         }));
       } else {
         // Fallback 2: Query SettlementTotalSales or SettlementHeader to get the single payment mode and total amount
@@ -793,11 +935,12 @@ router.get("/detail/:id/payments", async (req, res) => {
           const paymodeNameResult = await pool.request()
             .input("PayMode", sql.VarChar(50), row.PayMode || '')
             .query(`
-              SELECT TOP 1 COALESCE(Description, PayMode) AS PayModeName
+              SELECT TOP 1 COALESCE(NULLIF(LTRIM(RTRIM(Description)), ''), LTRIM(RTRIM(PayMode)), 'CASH') AS PayModeName
               FROM Paymode
               WHERE PayMode = @PayMode OR Description = @PayMode OR CAST(Position AS VARCHAR(10)) = @PayMode
             `);
-          const payModeName = paymodeNameResult.recordset[0]?.PayModeName || row.PayMode || 'CASH';
+          const rawResolvedName = paymodeNameResult.recordset[0]?.PayModeName || row.PayMode;
+          const payModeName = (rawResolvedName && rawResolvedName.trim()) ? rawResolvedName.trim() : 'CASH';
           payments = [{
             PaymentTransactionId: null,
             ReferenceType: 'BILL',
@@ -805,7 +948,7 @@ router.get("/detail/:id/payments", async (req, res) => {
             PayModeId: null,
             Amount: row.Amount,
             ReferenceNo: null,
-            PayModeName: payModeName ? payModeName.trim() : 'CASH'
+            PayModeName: payModeName
           }];
       }
     }
@@ -847,6 +990,177 @@ router.get("/detail/:id/rewards", async (req, res) => {
 });
 
 
+/* ================= LOGIN-WISE SALES REPORT ================= */
+router.get("/login-wise-sales", async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const pool = await poolPromise;
+    const filter = req.query.filter || "daily";
+    const date = req.query.date;
+    const { startDate, endDate } = req.query;
+    const dateWhere = getReportDateWhereSql(filter, "sh.LastSettlementDate", date, startDate, endDate);
+    const cctDateWhere = getReportDateWhereSql(filter, "cct.CreatedDate", date, startDate, endDate);
+    console.log(`[REPORT API] type=login-wise-sales filter=${filter} date=${date || 'today'} range=${startDate || ''}..${endDate || ''}`);
+
+    const result = await pool.request().query(`
+      WITH HeaderTotals AS (
+        SELECT
+          sh.CashierId,
+          COUNT(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN 1 END) AS TotalBills,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.SubTotal ELSE 0 END), 0) AS TotalSubTotal,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.DiscountAmount ELSE 0 END), 0) AS TotalDiscount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.ServiceCharge ELSE 0 END), 0) AS TotalServiceCharge,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.TotalTax ELSE 0 END), 0) AS TotalTax,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.TakeawayCharge ELSE 0 END), 0) AS TotalTakeaway,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.VoidItemAmount ELSE 0 END), 0) AS TotalVoidAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.VoidItemQty ELSE 0 END), 0) AS TotalVoidQty,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.RoundedBy ELSE 0 END), 0) AS TotalRounded,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 THEN sh.SysAmount ELSE 0 END), 0) AS TotalSales,
+          ISNULL(SUM(CASE WHEN sh.IsCancelled = 1 THEN 1 ELSE 0 END), 0) AS CancelledBills
+        FROM SettlementHeader sh
+        WHERE ${dateWhere}
+        GROUP BY sh.CashierId
+      ),
+      PaymentTotals AS (
+        SELECT
+          sh.CashierId,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('CASH','CAS','1') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS CashAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('CARD','VISA','MASTER','MASTERCARD','AMEX') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS CardAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('PAYNOW','3') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS PayNowAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('NETS','2') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS NetsAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('MEMBER','5') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS MemberAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('CREDIT','6') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS CreditAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('GRAB','10') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS GrabAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('FOODPANDA','9') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS FoodPandaAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('UPI','GPAY') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS UpiAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(LTRIM(RTRIM(ISNULL(sts.PayMode,'')))) IN ('FOC','4') THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS FocAmount,
+          ISNULL(SUM(CASE WHEN ISNULL(sh.IsCancelled, 0) = 0 AND UPPER(ISNULL(sts.PayMode,'')) LIKE 'YEAHPAY%' THEN ISNULL(sts.SysAmount,0) ELSE 0 END), 0) AS YeahPayAmount
+        FROM SettlementHeader sh
+        LEFT JOIN SettlementTotalSales sts ON sh.SettlementID = sts.SettlementID
+        WHERE ${dateWhere}
+        GROUP BY sh.CashierId
+      ),
+      CreditCollections AS (
+        SELECT
+          cct.CreatedBy AS CashierIdRaw,
+          ISNULL(SUM(cct.PaidAmount), 0) AS CreditCollectedAmount
+        FROM CustomerCreditTransactions cct
+        WHERE cct.TransactionType = 'PAYMENT'
+          AND ISNULL(cct.CustomerType, 'CREDIT') = 'CREDIT'
+          AND ${cctDateWhere}
+        GROUP BY cct.CreatedBy
+      )
+      SELECT
+        u.UserId AS CashierId,
+        ISNULL(NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserName) AS CashierName,
+        ISNULL(u.UserName, '-') AS UserLogin,
+        ISNULL(u.UserCode, '-') AS UserCode,
+        ISNULL(g.UserGroupCode, 'CASHIER') AS RoleCode,
+        ISNULL(g.UserGroupName, 'Cashier') AS RoleName,
+        ISNULL(h.TotalBills, 0) AS TotalBills,
+        ISNULL(h.TotalSubTotal, 0) AS TotalSubTotal,
+        ISNULL(h.TotalDiscount, 0) AS TotalDiscount,
+        ISNULL(h.TotalServiceCharge, 0) AS TotalServiceCharge,
+        ISNULL(h.TotalTax, 0) AS TotalTax,
+        ISNULL(h.TotalTakeaway, 0) AS TotalTakeaway,
+        ISNULL(h.TotalVoidAmount, 0) AS TotalVoidAmount,
+        ISNULL(h.TotalVoidQty, 0) AS TotalVoidQty,
+        ISNULL(h.TotalRounded, 0) AS TotalRounded,
+        ISNULL(h.TotalSales, 0) AS TotalSales,
+        ISNULL(p.CashAmount, 0) AS CashAmount,
+        ISNULL(p.CardAmount, 0) AS CardAmount,
+        ISNULL(p.PayNowAmount, 0) AS PayNowAmount,
+        ISNULL(p.NetsAmount, 0) AS NetsAmount,
+        ISNULL(p.MemberAmount, 0) AS MemberAmount,
+        ISNULL(p.CreditAmount, 0) AS CreditAmount,
+        ISNULL(p.GrabAmount, 0) AS GrabAmount,
+        ISNULL(p.FoodPandaAmount, 0) AS FoodPandaAmount,
+        ISNULL(p.UpiAmount, 0) AS UpiAmount,
+        ISNULL(p.YeahPayAmount, 0) AS YeahPayAmount,
+        ISNULL(h.CancelledBills, 0) AS CancelledBills,
+        ISNULL(cc.CreditCollectedAmount, 0) AS CreditCollectedAmount
+      FROM (
+        SELECT CAST(UserId AS NVARCHAR(50)) AS UserId, UserName, FullName, UserCode, UserGroupid FROM UserMaster
+      ) u
+      LEFT JOIN UserGroupMaster g ON u.UserGroupid = g.UserGroupId
+      LEFT JOIN HeaderTotals h ON (
+        TRY_CAST(h.CashierId AS UNIQUEIDENTIFIER) = u.UserId 
+        OR CAST(h.CashierId AS NVARCHAR(50)) = u.UserId
+        OR LOWER(LTRIM(RTRIM(h.CashierId))) = LOWER(LTRIM(RTRIM(u.UserName)))
+        OR LOWER(LTRIM(RTRIM(h.CashierId))) = LOWER(LTRIM(RTRIM(u.UserCode)))
+        OR LOWER(LTRIM(RTRIM(h.CashierId))) = LOWER(LTRIM(RTRIM(u.FullName)))
+      )
+      LEFT JOIN PaymentTotals p ON (
+        TRY_CAST(p.CashierId AS UNIQUEIDENTIFIER) = u.UserId 
+        OR CAST(p.CashierId AS NVARCHAR(50)) = u.UserId
+        OR LOWER(LTRIM(RTRIM(p.CashierId))) = LOWER(LTRIM(RTRIM(u.UserName)))
+        OR LOWER(LTRIM(RTRIM(p.CashierId))) = LOWER(LTRIM(RTRIM(u.UserCode)))
+        OR LOWER(LTRIM(RTRIM(p.CashierId))) = LOWER(LTRIM(RTRIM(u.FullName)))
+      )
+      LEFT JOIN CreditCollections cc ON (
+        TRY_CAST(cc.CashierIdRaw AS UNIQUEIDENTIFIER) = u.UserId
+        OR CAST(cc.CashierIdRaw AS NVARCHAR(50)) = u.UserId
+        OR LOWER(LTRIM(RTRIM(cc.CashierIdRaw))) = LOWER(LTRIM(RTRIM(u.UserName)))
+        OR LOWER(LTRIM(RTRIM(cc.CashierIdRaw))) = LOWER(LTRIM(RTRIM(u.UserCode)))
+        OR LOWER(LTRIM(RTRIM(cc.CashierIdRaw))) = LOWER(LTRIM(RTRIM(u.FullName)))
+      )
+      WHERE ISNULL(h.TotalSales, 0) > 0 OR ISNULL(cc.CreditCollectedAmount, 0) > 0
+      ORDER BY TotalSales DESC, CashierName ASC
+    `);
+
+    console.log(`[REPORT API] type=login-wise-sales rows=${result.recordset.length}`);
+    res.json(result.recordset || []);
+  } catch (err) {
+    console.error("[REPORT API] login-wise-sales error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ================= LOGIN-WISE SETTLEMENT REPORT ================= */
+router.get("/login-wise-settlement", async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const pool = await poolPromise;
+    const filter = req.query.filter || "daily";
+    const date = req.query.date;
+    const { startDate, endDate } = req.query;
+    const dateWhere = getReportDateWhereSql(filter, "sh.LastSettlementDate", date, startDate, endDate);
+    console.log(`[REPORT API] type=login-wise-settlement filter=${filter} date=${date || 'today'} range=${startDate || ''}..${endDate || ''}`);
+
+    const result = await pool.request().query(`
+      SELECT
+        CAST(sh.CashierId AS NVARCHAR(50)) AS CashierId,
+        ISNULL(um.FullName, ISNULL(um.UserName, 'Unknown / QR')) AS CashierName,
+        ISNULL(um.UserName, '-') AS UserLogin,
+        LTRIM(RTRIM(ISNULL(sts.PayMode, 'CASH'))) AS PayMode,
+        SUM(ISNULL(sts.SysAmount, 0)) AS SysAmount,
+        SUM(ISNULL(sts.ManualAmount, 0)) AS ManualAmount,
+        COUNT(DISTINCT sh.SettlementID) AS ReceiptCount
+      FROM SettlementHeader sh
+      INNER JOIN SettlementTotalSales sts ON sh.SettlementID = sts.SettlementID
+      LEFT JOIN UserMaster um ON (
+        TRY_CAST(sh.CashierId AS UNIQUEIDENTIFIER) = um.UserId
+        OR CAST(sh.CashierId AS NVARCHAR(50)) = um.UserId
+        OR LOWER(LTRIM(RTRIM(sh.CashierId))) = LOWER(LTRIM(RTRIM(um.UserName)))
+        OR LOWER(LTRIM(RTRIM(sh.CashierId))) = LOWER(LTRIM(RTRIM(um.UserCode)))
+        OR LOWER(LTRIM(RTRIM(sh.CashierId))) = LOWER(LTRIM(RTRIM(um.FullName)))
+      )
+      WHERE ${dateWhere}
+        AND ISNULL(sh.IsCancelled, 0) = 0
+      GROUP BY
+        CAST(sh.CashierId AS NVARCHAR(50)),
+        um.FullName, um.UserName,
+        LTRIM(RTRIM(ISNULL(sts.PayMode, 'CASH')))
+      ORDER BY CashierName, PayMode
+    `);
+
+    console.log(`[REPORT API] type=login-wise-settlement rows=${result.recordset.length}`);
+    res.json(result.recordset || []);
+  } catch (err) {
+    console.error("[REPORT API] login-wise-settlement error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get("/category", async (req, res) => {
   try {
@@ -1122,7 +1436,7 @@ router.get("/settlement", async (req, res) => {
             CASE 
               WHEN LTRIM(RTRIM(sd.PayMode)) = '2' THEN 'NETS'
               WHEN LTRIM(RTRIM(sd.PayMode)) = '3' THEN 'PAYNOW'
-              WHEN LTRIM(RTRIM(sd.PayMode)) = '4' THEN 'UPI'
+              WHEN LTRIM(RTRIM(sd.PayMode)) = '4' THEN 'FOC'
               ELSE LTRIM(RTRIM(ISNULL(sd.PayMode, 'CASH')))
             END
           )))) as Paymode,
@@ -1254,7 +1568,7 @@ router.get("/day-end-summary", async (req, res) => {
               CASE 
                 WHEN LTRIM(RTRIM(sd.PayMode)) = '2' THEN 'NETS'
                 WHEN LTRIM(RTRIM(sd.PayMode)) = '3' THEN 'PAYNOW'
-                WHEN LTRIM(RTRIM(sd.PayMode)) = '4' THEN 'UPI / GPAY'
+                WHEN LTRIM(RTRIM(sd.PayMode)) = '4' THEN 'FOC'
                 ELSE LTRIM(RTRIM(ISNULL(sd.PayMode, 'CASH')))
               END
             )))) as Paymode,
@@ -1359,12 +1673,20 @@ router.get("/day-end-summary", async (req, res) => {
       .query(`
         WITH RawCollections AS (
           SELECT 
-            CASE WHEN mm.MemberId IS NOT NULL THEN 'MEMBER' ELSE 'CREDIT' END AS CustomerType,
+            CASE 
+              WHEN cct.CustomerType = 'CREDIT' THEN 'CREDIT'
+              WHEN cct.CustomerType = 'MEMBER' THEN 'MEMBER'
+              WHEN ccm.CustomerId IS NOT NULL THEN 'CREDIT'
+              WHEN mm.MemberId IS NOT NULL THEN 'MEMBER'
+              ELSE 'CREDIT'
+            END AS CustomerType,
             UPPER(ISNULL(pm.Description, 'CASH')) AS PaymodeName,
             ptd.Amount
           FROM PaymentTransactionDetails ptd
           INNER JOIN Paymode pm ON pm.Position = ptd.PayModeId
-          LEFT JOIN MemberMaster mm ON ptd.ReferenceId = mm.MemberId
+          LEFT JOIN CustomerCreditTransactions cct ON ptd.ReferenceId = cct.TransactionId
+          LEFT JOIN CreditCustomerMaster ccm ON (ptd.ReferenceId = ccm.CustomerId OR cct.MemberId = ccm.CustomerId)
+          LEFT JOIN MemberMaster mm ON (ptd.ReferenceId = mm.MemberId OR cct.MemberId = mm.MemberId)
           WHERE ptd.ReferenceType = 'MEMBER'
             AND ${ptdWhereSql}
         )
@@ -1635,6 +1957,8 @@ router.post("/save", async (req, res) => {
     let hasRemaining = false;
 
     await runInTransaction(async (transaction) => {
+      const validCashierGuid = await resolveCashierUserId(transaction, cashierId);
+
       if (clientSettlementId) {
         settlementId = clientSettlementId;
       } else {
@@ -1846,11 +2170,11 @@ router.post("/save", async (req, res) => {
       .input("TableNo", sql.NVarChar(50), tableNo || null)
       .input("Section", sql.NVarChar(100), section || null)
       .input("MemberId", sql.UniqueIdentifier, toGuidOrNull(memberId))
-      .input("CashierID", sql.UniqueIdentifier, toGuidOrNull(cashierId))
+      .input("CashierID", sql.UniqueIdentifier, validCashierGuid)
       .input("BusinessUnitId", sql.UniqueIdentifier, sanitizeGuid(businessUnitId))
       .input("SysAmount", sql.Money, totalAmount || 0)
       .input("ManualAmount", sql.Money, totalAmount || 0)
-      .input("CreatedBy", sql.UniqueIdentifier, sanitizeGuid(cashierId))
+      .input("CreatedBy", sql.UniqueIdentifier, validCashierGuid)
       .input("CreatedOn", sql.DateTime, now)
       .input("SER_NAME", sql.NVarChar(255), req.body.serverName || null)
       .input("MobileNo", sql.NVarChar(50), req.body.mobileNo || req.body.MobileNo || orderMobileNo || null)
@@ -1869,7 +2193,7 @@ router.post("/save", async (req, res) => {
       .input("TotalLineItemDiscountAmount", sql.Decimal(18, 2), itemDiscountAmount || 0)
       .input("MergeCount", sql.Numeric, mergeCount)
       .input("SplitCount", sql.Numeric, splitIndexValue)
-      .input("GuestName", sql.NVarChar(9), req.body.customerName ? req.body.customerName.trim().substring(0, 9) : (orderCustomerName || tableCustomerName || null))
+      .input("GuestName", sql.NVarChar(100), req.body.customerName ? req.body.customerName.trim().substring(0, 100) : (orderCustomerName || tableCustomerName || null))
       .input("Pax", sql.Int, req.body.pax ? parseInt(req.body.pax) : (orderPax || tablePax || null))
       .input("startDate", sql.Date, formattedStartDate)
       .query(`
@@ -2120,7 +2444,7 @@ router.post("/save", async (req, res) => {
             payments,
             transaction,
             businessUnitId: sanitizeGuid(businessUnitId),
-            cashierId: sanitizeGuid(cashierId),
+            cashierId: validCashierGuid,
             orderId: guidOrderId,
             now,
             receiptCount
@@ -2156,7 +2480,7 @@ router.post("/save", async (req, res) => {
                 .input("PaidAmount", sql.Decimal(18, 2), finalMemberAmount)
                 .input("OutstandingAmount", sql.Decimal(18, 2), finalCreditAmount)
                 .input("Status", sql.NVarChar(20), finalCreditAmount > 0 ? 'OPEN' : 'PAID')
-                .input("CreatedBy", sql.UniqueIdentifier, toGuidOrNull(cashierId))
+                .input("CreatedBy", sql.UniqueIdentifier, validCashierGuid)
                 .input("startDate", sql.Date, formattedStartDate)
                 .query(`
                   INSERT INTO CustomerCreditTransactions (MemberId, SettlementId, BillNo, TransactionType, BillAmount, PaidAmount, OutstandingAmount, Status, Remarks, CreatedBy, CustomerType, start_date)
@@ -2177,7 +2501,7 @@ router.post("/save", async (req, res) => {
                 .input("PaidAmount", sql.Decimal(18, 2), 0)
                 .input("OutstandingAmount", sql.Decimal(18, 2), totalCreditAndMember)
                 .input("Status", sql.NVarChar(20), 'OPEN')
-                .input("CreatedBy", sql.UniqueIdentifier, toGuidOrNull(cashierId))
+                .input("CreatedBy", sql.UniqueIdentifier, validCashierGuid)
                 .input("startDate", sql.Date, formattedStartDate)
                 .query(`
                   INSERT INTO CustomerCreditTransactions (MemberId, SettlementId, BillNo, TransactionType, BillAmount, PaidAmount, OutstandingAmount, Status, Remarks, CreatedBy, CustomerType, start_date)
@@ -2213,8 +2537,8 @@ router.post("/save", async (req, res) => {
             .input("ReferenceNumber", sql.VarChar(100), null)
             .input("Remarks", sql.VarChar(500), paymentMethod || "")
             .input("BusinessUnitId", sql.UniqueIdentifier, sanitizeGuid(businessUnitId))
-            .input("CreatedBy", sql.UniqueIdentifier, sanitizeGuid(cashierId))
-            .input("ModifiedBy", sql.UniqueIdentifier, sanitizeGuid(cashierId))
+            .input("CreatedBy", sql.UniqueIdentifier, validCashierGuid)
+            .input("ModifiedBy", sql.UniqueIdentifier, validCashierGuid)
             .input("startDate", sql.Date, formattedStartDate)
             .query(`
               -- 🛡️ ATOMIC SYNC: Populating both tables in one go for report integrity
@@ -2236,9 +2560,9 @@ router.post("/save", async (req, res) => {
 
               -- 3. PaymentTransactionDetails (for /detail/:id/payments breakdown)
               INSERT INTO [dbo].[PaymentTransactionDetails] (
-                PaymentTransactionId, ReferenceType, ReferenceId, PayModeId, Amount, ReferenceNo, CreatedBy, CreatedDate
+                PaymentTransactionId, ReferenceType, ReferenceId, PayModeId, Amount, ReferenceNo, CreatedBy, CreatedDate, start_date
               ) VALUES (
-                NEWID(), 'BILL', @RestaurantBillId, @Paymode, @Amount, @ReferenceNumber, @CreatedBy, GETDATE()
+                NEWID(), 'BILL', @RestaurantBillId, @Paymode, @Amount, @ReferenceNumber, @CreatedBy, GETDATE(), @startDate
               );
             `);
           console.log(`[SAVE SALE] PaymentDetail Sync Success. Rows affected: ${payResult.rowsAffected.join(', ')}`);
@@ -2608,17 +2932,23 @@ router.post("/save", async (req, res) => {
             .input("cartId", sql.NVarChar(128), cleanTableId)
             .query("DELETE FROM [dbo].[CartItems] WHERE [CartId] = @cartId");
             
+          const targetTableNo = tableNo || cleanTableId;
           if (validTableGuid) {
             await transaction.request()
               .input("tid", sql.UniqueIdentifier, validTableGuid)
-              .query("UPDATE [dbo].[TableMaster] SET Status = 0, entry_status = NULL, TotalAmount = 0, StartTime = NULL, CurrentOrderId = NULL, CustomerName = NULL, Pax = NULL WHERE TableId = @tid");
+              .input("tno", sql.NVarChar(50), String(targetTableNo))
+              .query("UPDATE [dbo].[TableMaster] SET Status = 0, entry_status = NULL, TotalAmount = 0, StartTime = NULL, CurrentOrderId = NULL, CustomerName = NULL, Pax = NULL WHERE TableId = @tid OR TableNumber = @tno");
+          } else {
+            await transaction.request()
+              .input("tno", sql.NVarChar(50), String(targetTableNo))
+              .query("UPDATE [dbo].[TableMaster] SET Status = 0, entry_status = NULL, TotalAmount = 0, StartTime = NULL, CurrentOrderId = NULL, CustomerName = NULL, Pax = NULL WHERE TableNumber = @tno OR TableId = @tno");
           }
 
           const io = req.app.get("io");
           if (io) {
-            io.emit("table_status_updated", { tableId: cleanTableId.toLowerCase(), status: 0, totalAmount: 0, customerName: null, pax: null });
-            io.emit("cart_updated", { tableId: cleanTableId.toLowerCase() });
-            io.emit("order_closed", { tableId: cleanTableId.toLowerCase(), tableNo: tableNo, orderId: displayOrderId });
+            io.emit("table_status_updated", { tableId: cleanTableId.toLowerCase(), tableNo: targetTableNo, status: 0, totalAmount: 0, customerName: null, pax: null });
+            io.emit("cart_updated", { tableId: cleanTableId.toLowerCase(), tableNo: targetTableNo });
+            io.emit("order_closed", { tableId: cleanTableId.toLowerCase(), tableNo: targetTableNo, orderId: displayOrderId });
           }
 
           // 🚀 CLEANUP MERGED SOURCE TABLES AS WELL (Bullet 5)
@@ -2894,30 +3224,6 @@ router.get("/payment-history", async (req, res) => {
 
 // routes/sales.js
 
-router.get("/payment-methods", async (req, res) => {
-    try {
-      const pool = await poolPromise;
-      const result = await pool.request().query(`
-        SELECT 
-          RTRIM(LTRIM(PayMode))       as payMode,
-          RTRIM(LTRIM(Description))   as description,
-          Position,
-          Active        as active,
-          DeviceSN,
-          DeviceSalt,
-          YeahPayEnabled,
-          ISNULL(Commission, 0)      as commission,
-          ISNULL(ServiceCharge, 0)   as serviceCharge,
-          ISNULL(IsEntertainment, 0) as isEntertainment,
-          ISNULL(IsVoucher, 0)       as isVoucher
-        FROM [dbo].[Paymode] 
-        ORDER BY Position ASC
-      `);
-      res.json(result.recordset || []);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-});
 
 // Kept for backward compatibility — all fields now also returned by /payment-methods above.
 router.get("/payment-detail/:payMode", async (req, res) => {
@@ -3541,9 +3847,6 @@ router.post("/settlement/:id/change-payment", async (req, res) => {
           .query("UPDATE CustomerCreditTransactions SET PaymentMethod = @PayMode WHERE TransactionId = @TxId");
 
         await transaction.commit();
-        // Notify settlement screen to refresh
-        const ioLedger = req.app.get('io');
-        if (ioLedger) ioLedger.emit('settlement_updated', { action: 'payment_changed' });
         return res.json({ success: true, message: "Payment mode updated successfully" });
       } catch (txErr) {
         await transaction.rollback();
@@ -3603,7 +3906,26 @@ router.post("/settlement/:id/change-payment", async (req, res) => {
           .query("DELETE FROM CustomerCreditTransactions WHERE SettlementId = @Sid");
       }
 
-      // 1. Delete existing payment records
+      // 1. Read original start_date from PaymentDetailCur BEFORE deleting
+      //    This is critical: Settlement screen filters by start_date, so new
+      //    records must carry the same date as the original payment records.
+      //    (DateEntry may be empty after Day End, causing start_date = NULL)
+      const origStartDateRes = await transaction.request()
+        .input("Sid", sql.UniqueIdentifier, realSettlementId)
+        .query(`SELECT TOP 1 start_date FROM [dbo].[PaymentDetailCur] WHERE RestaurantBillId = @Sid`);
+      const originalStartDate = origStartDateRes.recordset[0]?.start_date ?? null;
+
+      // 2. Delete old auto-generated CashInEntry records for this settlement
+      //    (processSplitPayments will re-insert them; avoid duplicates)
+      await transaction.request()
+        .input("Sid", sql.VarChar(100), String(realSettlementId))
+        .query(`
+          DELETE FROM CashInEntry
+          WHERE (ReferenceNo = @Sid OR Remarks LIKE '%' + @Sid + '%')
+            AND (Reason = 'Cash In' OR Reason = 'Ledger Payment')
+        `);
+
+      // 3. Delete existing payment records
       const deleteReq = new sql.Request(transaction);
       deleteReq.input("Sid", sql.UniqueIdentifier, realSettlementId);
       await deleteReq.query(`
@@ -3616,7 +3938,8 @@ router.post("/settlement/:id/change-payment", async (req, res) => {
         DELETE FROM SettlementCreditSales WHERE SettlementID = @Sid;
       `);
 
-      // 2. Insert new split payments
+      // 4. Insert new split payments — pass original start_date so
+      //    PaymentDetailCur records are correctly dated for the Settlement screen
       await processSplitPayments({
         referenceType: "BILL",
         referenceId: realSettlementId,
@@ -3625,7 +3948,8 @@ router.post("/settlement/:id/change-payment", async (req, res) => {
         businessUnitId: toGuidOrNull(BusinessUnitId),
         cashierId: toGuidOrNull(CreatedBy),
         orderId: toGuidOrNull(OrderId),
-        receiptCount: 1
+        receiptCount: 1,
+        startDate: originalStartDate   // ← preserve original business date
       });
 
       // 3. Update RestaurantInvoice & RestaurantInvoiceCur (PaymentTermCode)
@@ -3743,9 +4067,6 @@ router.post("/settlement/:id/change-payment", async (req, res) => {
       }
 
       await transaction.commit();
-      // Notify settlement screen to refresh
-      const io = req.app.get('io');
-      if (io) io.emit('settlement_updated', { action: 'payment_changed' });
       res.json({ success: true, message: "Payment mode updated successfully" });
     } catch (txErr) {
       await transaction.rollback();

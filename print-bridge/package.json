@@ -5,7 +5,7 @@
   "author": "UniPro",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc && xcopy /E /I /Y src\\public dist\\public",
+    "build": "tsc && xcopy /E /I /Y src\\public dist\\public && copy /Y src\\RawPrint.exe dist\\RawPrint.exe",
     "start": "electron .",
     "dev": "npm run build && electron .",
     "package": "npm run build && electron-builder --win --x64"

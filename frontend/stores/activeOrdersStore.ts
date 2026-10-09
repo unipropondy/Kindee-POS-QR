@@ -459,7 +459,7 @@ const storeCreator: StateCreator<
                 ...apiItem,
                 readyAt,
                 note: apiItem.note ?? localItem.note ?? "",
-                isTakeaway: apiItem.isTakeaway ?? localItem.isTakeaway ?? false,
+                isTakeaway: Boolean(apiItem.isTakeaway ?? apiItem.IsTakeaway ?? apiItem.isTakeAway ?? apiItem.IsTakeAway ?? localItem.isTakeaway ?? false),
                 modifiers: apiItem.modifiers?.length ? apiItem.modifiers : (localItem.modifiers || []),
               };
             })

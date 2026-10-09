@@ -1497,7 +1497,13 @@ export const useCartStore = create<CartState>()(
 
             // 🚀 SMART MERGE: Favor local edits (Note, TW, Qty) over stale server data
             const mergedItems = filteredDbItems.map((dbItem: CartItem) => {
-              const localMatch = localPendingItems.find(li => li.lineItemId === dbItem.lineItemId);
+              const localMatch = localPendingItems.find(li => 
+                li.lineItemId === dbItem.lineItemId ||
+                (li.id === dbItem.id &&
+                 getModifierKey(li.modifiers) === getModifierKey(dbItem.modifiers) &&
+                 getComboKey(li.comboSelections) === getComboKey(dbItem.comboSelections) &&
+                 (!isOpenPriceItem(dbItem) || dbItem.price === li.price))
+              );
               
               // 🛡️ SYNC SHIELD: If we have a local version that was modified recently,
               // we MUST preserve the local Qty/Note/TW even for SENT items.
@@ -1548,12 +1554,6 @@ export const useCartStore = create<CartState>()(
                   getModifierKey(dbItem.modifiers) === getModifierKey(localItem.modifiers) &&
                   getComboKey(dbItem.comboSelections) === getComboKey(localItem.comboSelections)
                 ) {
-                  const dbStatus = dbItem.status || "NEW";
-                  const localStatus = localItem.status || "NEW";
-                  if (dbStatus !== localStatus) {
-                    return false;
-                  }
-                  
                   if (isOpenPriceItem(dbItem) || isOpenPriceItem(localItem)) {
                     return dbItem.price === localItem.price;
                   }

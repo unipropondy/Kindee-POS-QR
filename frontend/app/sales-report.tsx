@@ -210,6 +210,27 @@ export default function SalesReport() {
   const [dishReport, setDishReport] = useState<any[]>([]);
   const [settlementReport, setSettlementReport] = useState<any[]>([]);
   const [artistTargetReport, setArtistTargetReport] = useState<any[]>([]);
+  const [selectedCashierId, setSelectedCashierId] = useState<string>("ALL");
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const [operatorsList, setOperatorsList] = useState<any[]>([]);
+
+  const availableOperators = useMemo(() => {
+    if (operatorsList.length > 0) return operatorsList;
+    const map = new Map();
+    sales.forEach((s) => {
+      if (s.CashierId && !map.has(String(s.CashierId))) {
+        map.set(String(s.CashierId), {
+          CashierId: String(s.CashierId),
+          CashierName: s.UserName || s.CashierName || `User ${s.CashierId}`,
+          UserLogin: s.UserLogin || "-",
+          RoleName: s.RoleName || "Cashier",
+          TotalSales: 0,
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [operatorsList, sales]);
+
   const [loadingReport, setLoadingReport] = useState(false);
   const [showPrintPrompt, setShowPrintPrompt] = useState(false);
   const [isReprinting, setIsReprinting] = useState(false);
@@ -456,6 +477,22 @@ export default function SalesReport() {
     }
   };
 
+  const fetchOperators = async () => {
+    try {
+      const res = await fetch(
+        `${API_URL}/api/reports/login-wise-sales?filter=${selectedFilter.toLowerCase()}&date=${selectedDate}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setOperatorsList(data);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch operators list:", e);
+    }
+  };
+
   const fetchData = async () => {
     try {
       if (sales.length === 0) setLoading(true);
@@ -480,6 +517,7 @@ export default function SalesReport() {
         fetchSales(), 
         fetchSummary(), 
         fetchPaymentMethods(),
+        fetchOperators(),
         detailReportType ? fetchDetailReport(detailReportType, selectedFilter) : Promise.resolve()
       ]);
     } catch (error) {
@@ -517,8 +555,12 @@ export default function SalesReport() {
           reportType,
           filterType: reportFilter,
         });
+        const token = useAuthStore.getState().token;
         const response = await fetch(
           `${API_URL}/api/reports/${endpoint}?${params.toString()}`,
+          {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          }
         );
 
         if (!response.ok) {
@@ -666,8 +708,12 @@ export default function SalesReport() {
         endStr = rangeEnd;
       }
 
+      const token = useAuthStore.getState().token;
       const response = await fetch(`${API_URL}/api/sales/all?startDate=${startStr}&endDate=${endStr}`, {
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
       });
       if (!response.ok) throw new Error("Failed to fetch sales");
       const data = await response.json();
@@ -713,8 +759,11 @@ export default function SalesReport() {
         startStr = rangeStart;
         endStr = rangeEnd;
       }
+      const token = useAuthStore.getState().token;
       const url = `${API_URL}/api/sales/range?startDate=${startStr}&endDate=${endStr}`;
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const data = await response.json();
       setSummary(Array.isArray(data) ? data[0] : data);
     } catch (error) {
@@ -727,7 +776,13 @@ export default function SalesReport() {
     const endObj = new Date();
     const startObj = new Date();
 
-    if (downloadFilter === "WEEKLY") {
+    if (downloadFilter === "DAILY") {
+      // Use the active business date (e.g. 2026-09-29), not today's calendar date,
+      // because settlement data is keyed to the business day, not the wall clock date.
+      const bizDate = activeBusinessDate || getSingaporeDateString(new Date());
+      startObj.setTime(new Date(bizDate).getTime());
+      endObj.setTime(new Date(bizDate).getTime());
+    } else if (downloadFilter === "WEEKLY") {
       startObj.setDate(startObj.getDate() - 6);
     } else if (downloadFilter === "MONTHLY") {
       startObj.setDate(1);
@@ -749,25 +804,26 @@ export default function SalesReport() {
     const endStr = getSingaporeDateString(endObj);
 
     const userName = await AsyncStorage.getItem("userName") || "SR";
+    const token = useAuthStore.getState().token;
+    const authHeaders: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
 
     const summaryUrl = `${API_URL}/api/sales/day-end-summary?startDate=${startStr}&endDate=${endStr}`;
-    const summaryRes = await fetch(summaryUrl);
+    const summaryRes = await fetch(summaryUrl, { headers: authHeaders });
     const summaryData = await summaryRes.json();
 
     if (!summaryData.success) {
-      throw new Error("Failed to fetch report data");
+      console.warn("[fetchReportData] day-end-summary returned non-success:", summaryData?.error || summaryRes.status);
+      // Don't throw — fall through with empty summaryData so the backend PDF generator still runs
     }
 
     // We fetch dish report for item-wise data
-    const dishUrl = `${API_URL}/api/reports/dish?filter=custom&date=${startStr}`;
-    // wait, api/reports/dish expects a filter like daily, weekly, monthly, yearly, custom
-    // and for custom it might use the same logic?
-    // actually, api/reports/dish uses getReportDateWhereSql, which doesn't fully support custom dates unless handled.
-    // I'll just pass the filter if it's not custom, otherwise pass daily for now or omit items.
     let items: any[] = [];
     try {
       const dishFilter = downloadFilter === "CUSTOM" ? "daily" : downloadFilter.toLowerCase();
-      const dRes = await fetch(`${API_URL}/api/reports/dish?filter=${dishFilter}&date=${startStr}`);
+      const dRes = await fetch(`${API_URL}/api/reports/dish?filter=${dishFilter}&date=${startStr}`, { headers: authHeaders });
       const dData = await dRes.json();
       if (Array.isArray(dData)) {
         items = dData.map((d: any) => ({
@@ -823,13 +879,22 @@ export default function SalesReport() {
     const sa = summaryData.salesAnalysis || {};
     const vd = summaryData.voidDetail || {};
 
+    const selectedUserObj = availableOperators.find(op => String(op.CashierId) === String(selectedCashierId));
+    const formattedCashierName = selectedCashierId === "ALL"
+      ? "Whole Sales (All Users)"
+      : (selectedUserObj
+          ? `${selectedUserObj.CashierName || ''} ${selectedUserObj.UserLogin && selectedUserObj.UserLogin !== '-' ? `(@${selectedUserObj.UserLogin})` : ''}`.trim()
+          : String(selectedCashierId));
+
     return {
       filterType: downloadFilter,
       period: downloadFilter === "DAILY" ? startStr : `${startStr} to ${endStr}`,
       companyName: summaryData.orgInfo?.Name || 'AL-HAZIMA RESTAURANT PTE LTD',
       companyAddress: summaryData.orgInfo?.Address1_Line1 || 'No 4, Cheong Chin Nam Road, SINGAPORE 599729',
       companyPhone: summaryData.orgInfo?.Address1_Telephone1 || '65130000',
-      cashierName: userName,
+      selectedCashierId,
+      cashierName: formattedCashierName,
+      printedBy: userName,
 
       // Match backend generatePdfDocDefinition expectations
       netSales: sa.baseSales || 0,
@@ -1060,11 +1125,20 @@ export default function SalesReport() {
   const dateScopedSales = useMemo(() => {
     let result = sales;
 
+    const extractYYYYMMDD = (dateVal: any): string => {
+      if (!dateVal) return "";
+      if (typeof dateVal === "string") {
+        const match = dateVal.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+      }
+      return getSingaporeDateString(parseDatabaseDate(dateVal));
+    };
+
     if (selectedFilter === "DAILY") {
       result = sales.filter((s) => {
         const dateToUse = s.BusinessDate || s.SettlementDate;
         if (!dateToUse) return false;
-        const itemDate = getSingaporeDateString(parseDatabaseDate(dateToUse));
+        const itemDate = extractYYYYMMDD(dateToUse);
         return itemDate === selectedDate;
       });
     } else if (selectedFilter === "WEEKLY") {
@@ -1084,7 +1158,7 @@ export default function SalesReport() {
       result = sales.filter((s) => {
         const dateToUse = s.BusinessDate || s.SettlementDate;
         if (!dateToUse) return false;
-        const saleDateStr = getSingaporeDateString(parseDatabaseDate(dateToUse));
+        const saleDateStr = extractYYYYMMDD(dateToUse);
         return saleDateStr >= startStr && saleDateStr <= endStr;
       });
     } else if (selectedFilter === "MONTHLY") {
@@ -1099,7 +1173,7 @@ export default function SalesReport() {
       result = sales.filter((s) => {
         const dateToUse = s.BusinessDate || s.SettlementDate;
         if (!dateToUse) return false;
-        const saleDateStr = getSingaporeDateString(parseDatabaseDate(dateToUse));
+        const saleDateStr = extractYYYYMMDD(dateToUse);
         return saleDateStr >= startStr && saleDateStr <= endStr;
       });
     } else if (selectedFilter === "YEARLY") {
@@ -1113,14 +1187,14 @@ export default function SalesReport() {
       result = sales.filter((s) => {
         const dateToUse = s.BusinessDate || s.SettlementDate;
         if (!dateToUse) return false;
-        const saleDateStr = getSingaporeDateString(parseDatabaseDate(dateToUse));
+        const saleDateStr = extractYYYYMMDD(dateToUse);
         return saleDateStr >= startStr && saleDateStr <= endStr;
       });
     } else if (selectedFilter === "CUSTOM" && rangeStart && rangeEnd) {
       result = sales.filter((s) => {
         const dateToUse = s.BusinessDate || s.SettlementDate;
         if (!dateToUse) return false;
-        const saleDateStr = getSingaporeDateString(parseDatabaseDate(dateToUse));
+        const saleDateStr = extractYYYYMMDD(dateToUse);
         return saleDateStr >= rangeStart && saleDateStr <= rangeEnd;
       });
     }
@@ -1176,6 +1250,8 @@ export default function SalesReport() {
   }, [dateScopedSales]);
 
   const baseFilteredSales = useMemo(() => {
+    const norm = (str: string) => (str || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
     return groupedSales.filter((s) => {
       const modeUpper = s.PayMode?.toUpperCase().trim() || "";
       const isUpiMode = modeUpper.includes("UPI") || modeUpper.includes("GPAY");
@@ -1184,21 +1260,29 @@ export default function SalesReport() {
       // Support checking components of combined payment modes (e.g. "CASH + NETS")
       const splitModes = modeUpper.includes("+") ? modeUpper.split("+").map((m: string) => m.trim()) : [modeUpper];
 
+      const isModeSelected = (mode: string) => {
+        if (activePaymentModes.length === 0) return true;
+        const cleanM = norm(mode);
+        if (!cleanM) return true;
+        return activePaymentModes.some(ap => {
+          const cleanAp = norm(ap);
+          return cleanAp === cleanM || cleanM.includes(cleanAp) || cleanAp.includes(cleanM);
+        });
+      };
+
       const modeMatch =
-        splitModes.some((m: string) => activePaymentModes.includes(m)) ||
-        (activePaymentModes.includes("UPI") && isUpiMode) ||
+        splitModes.some(isModeSelected) ||
+        (activePaymentModes.some(ap => norm(ap) === "UPI") && isUpiMode) ||
         (showCancelledOrders && s.IsCancelled) ||
-        (typeUpper === 'LEDGER' && (
-          splitModes.some((m: string) => activePaymentModes.includes(m)) ||
-          (s.OrderId?.toLowerCase().includes("member") && activePaymentModes.includes("MEMBER")) ||
-          (s.OrderId?.toLowerCase().includes("credit") && activePaymentModes.includes("CREDIT"))
-        ));
+        (typeUpper === 'LEDGER');
+
       const typeMatch =
+        !s.OrderType ||
         typeUpper === 'LEDGER' ||
+        activeOrderTypes.length === 0 ||
         activeOrderTypes.length === 2 ||
-        (s.OrderType
-          ? activeOrderTypes.includes(typeUpper)
-          : activeOrderTypes.includes("DINE-IN"));
+        activeOrderTypes.some(at => norm(at) === norm(typeUpper));
+
       return modeMatch && typeMatch;
     });
   }, [
@@ -1210,7 +1294,8 @@ export default function SalesReport() {
 
   const filteredSales = useMemo(() => {
     const filtered = baseFilteredSales.filter((s) => {
-      return showCancelledOrders || !s.IsCancelled;
+      const cashierMatch = selectedCashierId === "ALL" || String(s.CashierId) === String(selectedCashierId);
+      return (showCancelledOrders || !s.IsCancelled) && cashierMatch;
     });
 
     if (sortOrder === "NEWEST") {
@@ -1222,11 +1307,12 @@ export default function SalesReport() {
     } else {
       return [...filtered].sort((a, b) => b.SysAmount - a.SysAmount);
     }
-  }, [baseFilteredSales, showCancelledOrders, sortOrder]);
+  }, [baseFilteredSales, showCancelledOrders, sortOrder, selectedCashierId]);
 
   const filteredMetrics = useMemo(() => {
     const processedBills = new Set<string>();
-    return dateScopedSales.reduce(
+    const scoped = selectedCashierId === "ALL" ? dateScopedSales : dateScopedSales.filter(s => String(s.CashierId) === String(selectedCashierId));
+    return scoped.reduce(
       (acc, s) => {
         const isSubsequentSplit = s.SettlementID && s.SettlementID.includes("-") && s.SettlementID.split("-").length > 5 && s.SettlementID.split("-").pop().match(/^\d+$/);
 
@@ -1242,7 +1328,7 @@ export default function SalesReport() {
         const roundedSysAmount = Math.round(((s.SysAmount || 0) + Number.EPSILON) * 100) / 100;
 
         if (s.OrderType === 'LEDGER') {
-          if (s.OrderId === 'Credit Payment Collected') {
+          if (s.OrderId === 'Credit Payment Collected' || s.CustomerType === 'CREDIT') {
             acc.CreditPaymentsCollected += roundedSysAmount;
           } else {
             acc.MemberPaymentsCollected += roundedSysAmount;
@@ -1266,7 +1352,7 @@ export default function SalesReport() {
         } else if (mode === "CREDIT") {
           acc.Credit += roundedSysAmount;
           acc.CreditOutstanding += Math.round(((Number(s.OutstandingAmount) || 0) + Number.EPSILON) * 100) / 100;
-        } else if (mode === "FOC") {
+        } else if (mode === "FOC" || mode.includes("FOC")) {
           acc.FocSales += roundedSysAmount;
         }
 
@@ -1316,7 +1402,7 @@ export default function SalesReport() {
         TakeawayCharge: 0,
       },
     );
-  }, [dateScopedSales]);
+  }, [dateScopedSales, selectedCashierId]);
 
   const avgOrder = useMemo(() => {
     if (!filteredMetrics.TotalTransactions) return 0;
@@ -1724,29 +1810,36 @@ export default function SalesReport() {
 
   const handleConfirmCancelOrder = async () => {
     if (!selectedOrder) return;
-    try {
-      setShowCancelOrderConfirm(false);
-      setLoadingDetails(true);
-      const res = await fetch(`${API_URL}/api/sales/settlement/${selectedOrder.SettlementID}/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: cancellationReason }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        showToast({ type: "success", message: "Order cancelled successfully" });
-        setCancellationReason("");
-        await refreshOrder(selectedOrder.SettlementID);
-        fetchSales();
-      } else {
-        showToast({ type: "error", message: data.error || "Failed to cancel order" });
+    promptPassword(
+      "Admin Password Required",
+      `Verify Admin credentials to cancel Order #${formatOrderId(selectedOrder)}`,
+      "ADMIN",
+      async () => {
+        try {
+          setShowCancelOrderConfirm(false);
+          setLoadingDetails(true);
+          const res = await fetch(`${API_URL}/api/sales/settlement/${selectedOrder.SettlementID}/cancel`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: cancellationReason }),
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            showToast({ type: "success", message: "Order cancelled successfully" });
+            setCancellationReason("");
+            await refreshOrder(selectedOrder.SettlementID);
+            fetchSales();
+          } else {
+            showToast({ type: "error", message: data.error || "Failed to cancel order" });
+          }
+        } catch (err: any) {
+          console.error(err);
+          showToast({ type: "error", message: err.message || "An error occurred" });
+        } finally {
+          setLoadingDetails(false);
+        }
       }
-    } catch (err: any) {
-      console.error(err);
-      showToast({ type: "error", message: err.message || "An error occurred" });
-    } finally {
-      setLoadingDetails(false);
-    }
+    );
   };
 
 
@@ -1961,6 +2054,8 @@ export default function SalesReport() {
     if (!detailReportType) {
       return null;
     }
+
+
 
     const isSettlement = detailReportType === "SETTLEMENT";
     const isArtistTarget = detailReportType === "ARTIST_TARGET";
@@ -2673,6 +2768,202 @@ export default function SalesReport() {
 
 
 
+
+
+      {/* ── USER / CASHIER SHIFT FILTER BAR (DROPDOWN - LIKE SETTLEMENT SCREEN) ── */}
+      <View style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: Theme.bgCard,
+        padding: 10,
+        borderRadius: 12,
+        borderWidth: 1.5,
+        borderColor: Theme.border,
+        marginBottom: 15,
+        gap: 12,
+      }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Ionicons name="people-outline" size={18} color={Theme.primary} />
+          <Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: Theme.textPrimary }}>
+            SALES REPORT VIEW:
+          </Text>
+        </View>
+
+        {/* Dropdown Trigger */}
+        <TouchableOpacity
+          onPress={() => setShowUserDropdown(true)}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: Theme.bgInput,
+            paddingHorizontal: 16,
+            paddingVertical: 10,
+            borderRadius: 10,
+            borderWidth: 1.5,
+            borderColor: Theme.primary,
+            minWidth: 260,
+            maxWidth: '100%',
+            gap: 10
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+            {selectedCashierId === "ALL" ? (
+              <>
+                <Ionicons name="globe-outline" size={16} color={Theme.primary} />
+                <Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: Theme.textPrimary }}>
+                  Whole Sales (All Users)
+                </Text>
+              </>
+            ) : (
+              (() => {
+                const sel = availableOperators.find(op => String(op.CashierId) === String(selectedCashierId));
+                return (
+                  <>
+                    <Ionicons name="person-circle-outline" size={18} color={Theme.primary} />
+                    <Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: Theme.textPrimary }} numberOfLines={1}>
+                      {sel ? `${sel.CashierName} ${sel.UserLogin && sel.UserLogin !== '-' ? `(@${sel.UserLogin})` : ''}` : `User ID: ${selectedCashierId}`}
+                    </Text>
+                  </>
+                );
+              })()
+            )}
+          </View>
+          <Ionicons name="chevron-down" size={18} color={Theme.primary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Operator Dropdown Options Modal */}
+      <Modal
+        visible={showUserDropdown}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowUserDropdown(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setShowUserDropdown(false)}
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 20
+          }}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            style={{
+              width: SCREEN_W >= 600 ? 420 : '95%',
+              maxHeight: '70%',
+              backgroundColor: Theme.bgCard,
+              borderRadius: 16,
+              padding: 16,
+              borderWidth: 1.5,
+              borderColor: Theme.border,
+              ...Platform.select({
+                web: { boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }
+              }) as any
+            }}
+          >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: Theme.border }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="filter-outline" size={20} color={Theme.primary} />
+                <Text style={{ fontFamily: Fonts.bold, fontSize: 15, color: Theme.textPrimary }}>
+                  Select User Sales View
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowUserDropdown(false)}>
+                <Ionicons name="close" size={20} color={Theme.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 350 }}>
+              {/* Whole Sales Option */}
+              <TouchableOpacity
+                onPress={() => {
+                  setSelectedCashierId("ALL");
+                  setShowUserDropdown(false);
+                }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: 12,
+                  borderRadius: 10,
+                  backgroundColor: selectedCashierId === "ALL" ? (Theme.primary + '15') : 'transparent',
+                  marginBottom: 6,
+                  borderWidth: 1,
+                  borderColor: selectedCashierId === "ALL" ? Theme.primary : 'transparent'
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Ionicons name="globe-outline" size={18} color={selectedCashierId === "ALL" ? Theme.primary : Theme.textSecondary} />
+                  <Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: selectedCashierId === "ALL" ? Theme.primary : Theme.textPrimary }}>
+                    Whole Sales (All Users)
+                  </Text>
+                </View>
+                {selectedCashierId === "ALL" && (
+                  <Ionicons name="checkmark-circle" size={18} color={Theme.primary} />
+                )}
+              </TouchableOpacity>
+
+              {/* Individual Users Options */}
+              {availableOperators
+                .filter((op) => {
+                  const role = String(op.RoleName || op.RoleCode || op.UserGroupName || '').toUpperCase();
+                  const login = String(op.UserLogin || op.UserName || '').toUpperCase();
+                  const name = String(op.CashierName || op.FullName || '').toUpperCase();
+                  // Exclude waiter, void, kds user groups / usernames
+                  if (role.includes('WAITER') || role.includes('KDS') || role.includes('VOID') || role.includes('KITCHEN')) return false;
+                  if (login.startsWith('WAITER') || login.startsWith('KDS') || login.startsWith('VOID') || login.startsWith('LOKI')) return false;
+                  if (name.includes('WAITER') || name.includes('KDS') || name.includes('VOID')) return false;
+                  return true;
+                })
+                .map((op) => {
+                const isSel = String(selectedCashierId) === String(op.CashierId);
+                const userNetSales = Number(op.TotalSales ?? op.TotalNetSales ?? op.TotalSubTotal ?? 0);
+                return (
+                  <TouchableOpacity
+                    key={`sales-dropdown-op-${op.CashierId}`}
+                    onPress={() => {
+                      setSelectedCashierId(String(op.CashierId));
+                      setShowUserDropdown(false);
+                    }}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: 12,
+                      borderRadius: 10,
+                      backgroundColor: isSel ? (Theme.primary + '15') : 'transparent',
+                      marginBottom: 6,
+                      borderWidth: 1,
+                      borderColor: isSel ? Theme.primary : 'transparent'
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Ionicons name="person-circle-outline" size={20} color={isSel ? Theme.primary : Theme.textSecondary} />
+                      <View>
+                        <Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: isSel ? Theme.primary : Theme.textPrimary }}>
+                          {op.CashierName} {op.UserLogin && op.UserLogin !== '-' ? `(@${op.UserLogin})` : ''}
+                        </Text>
+                        <Text style={{ fontFamily: Fonts.regular, fontSize: 11, color: Theme.textMuted }}>
+                          Role: {op.RoleName || op.RoleCode || 'Cashier'} {userNetSales > 0 ? `• Sales: ₹${userNetSales.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : ''}
+                        </Text>
+                      </View>
+                    </View>
+                    {isSel && (
+                      <Ionicons name="checkmark-circle" size={18} color={Theme.primary} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Metrics Grid */}
       <View style={styles.metricsGrid}>
         {SCREEN_W >= 600 ? (
@@ -2812,6 +3103,7 @@ export default function SalesReport() {
             Item Sales Report
           </Text>
         </TouchableOpacity>
+
       </View>
 
       {renderDetailReport()}
@@ -3839,7 +4131,7 @@ export default function SalesReport() {
                   })()}
                   {Number(selectedOrder?.ServiceCharge) > 0 && (
                     <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                      <Text style={{ fontSize: 12, fontFamily: Fonts.semiBold, color: Theme.textSecondary }}>Item Service Charge</Text>
+                      <Text style={{ fontSize: 12, fontFamily: Fonts.semiBold, color: Theme.textSecondary }}>{String(selectedOrder?.OrderType || selectedOrder?.orderType || "").toUpperCase().includes("TAKEAWAY") || String(selectedOrder?.TableNo || selectedOrder?.tableNo || "").toUpperCase().startsWith("TW") ? "TW Service Charge" : "Item Service Charge"}</Text>
                       <Text style={{ fontSize: 13, fontFamily: Fonts.bold, color: Theme.textPrimary }}>
                         {formatCurrency(selectedOrder?.ServiceCharge)}
                       </Text>
@@ -5718,6 +6010,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 10,
   },
+  emptyContainer: {
+    minHeight: 120,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    paddingVertical: 24,
+  },
+  emptyText: {
+    color: Theme.textMuted,
+    fontFamily: Fonts.medium,
+    fontSize: 13,
+  },
   reportTable: {
     width: "100%",
     minWidth: 360,
@@ -5813,6 +6117,43 @@ const styles = StyleSheet.create({
     width: 80,
     textAlign: "right",
     flexShrink: 0,
+  },
+  tableHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  tableHeaderCell: {
+    color: Theme.textSecondary,
+    fontFamily: Fonts.bold,
+    fontSize: 12,
+    textTransform: "uppercase",
+  },
+  tableDataRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.border + "40",
+  },
+  tableCellPrimary: {
+    color: Theme.textPrimary,
+    fontFamily: Fonts.bold,
+    fontSize: 13,
+  },
+  tableCellSecondary: {
+    color: Theme.textMuted,
+    fontFamily: Fonts.regular,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  tableCellNum: {
+    color: Theme.textPrimary,
+    fontFamily: Fonts.bold,
+    fontSize: 13,
+    textAlign: "right",
   },
   chartsScrollContent: {
     paddingRight: 16,
@@ -6054,7 +6395,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "rgba(0,0,0,0.4)",
   },
-  modalDismiss: { ...StyleSheet.absoluteFillObject },
+  modalDismiss: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
   modalContent: {
     width: "92%",
     maxWidth: 400,

@@ -156,7 +156,7 @@ export function saveConfig(newConfig: BridgeConfig): boolean {
     const toSave: BridgeConfig = {
       storeId: newConfig.storeId,
       bridgeToken: newConfig.bridgeToken,
-      pollIntervalMs: newConfig.pollIntervalMs || 2000,
+      pollIntervalMs: newConfig.pollIntervalMs || 500,
       port: newConfig.port || 3050,
       backends: cleanBackends,
       customerDisplay: newConfig.customerDisplay
