@@ -766,9 +766,16 @@ export default function CustomerMenuScreen() {
     return () => clearInterval(timer);
   }, []);
 
+  // Compute active category/kitchen and active dish groups dynamically so render is instant
+  const activeKitchenId = selectedKitchenId || (kitchens.filter(k => isPublishedForQR(k.IsPublished))[0]?.CategoryId || null);
+  const storeGroupsForKitchen = activeKitchenId ? (useMenuStore.getState().dishGroups[activeKitchenId] || useMenuStore.getState().dishGroups[cleanId(activeKitchenId)] || []) : [];
+  const publishedStoreGroups = storeGroupsForKitchen.filter((g: any) => isPublishedForQR(g.IsPublished));
+  const activeDishGroups = dishGroups.length > 0 ? dishGroups : publishedStoreGroups;
+  const activeGroupId = selectedGroupId || (activeDishGroups.length > 0 ? activeDishGroups[0].DishGroupId : null);
+
   // Combine allDishes with group-specific dishes from store
-  const groupSpecificDishes = selectedGroupId
-    ? (dishesByGroup[selectedGroupId] || dishesByGroup[cleanId(selectedGroupId)] || [])
+  const groupSpecificDishes = activeGroupId
+    ? (dishesByGroup[activeGroupId] || dishesByGroup[cleanId(activeGroupId)] || [])
     : [];
   
   const combinedMap = new Map<string, any>();
@@ -808,7 +815,7 @@ export default function CustomerMenuScreen() {
       return nameMatch || descMatch;
     }
     
-    // Check if dish matches group (either primary DishGroupId or via DishGroupMapping or group API)
+    // Check if dish matches group (either primary DishGroupId, via DishGroupMapping, or group API store cache)
     const matchesDishGroupId = (groupId: string) => {
       if (!groupId) return false;
       const targetGId = cleanId(groupId);
@@ -817,18 +824,19 @@ export default function CustomerMenuScreen() {
         const mappedArr = String(dish.MappedGroupIds).split(',').map(s => cleanId(s)).filter(Boolean);
         if (mappedArr.includes(targetGId)) return true;
       }
-      if (selectedGroupId && cleanId(selectedGroupId) === targetGId && groupSpecificDishes.some(gd => cleanId(gd.DishId || gd.id) === cleanId(dish.DishId || dish.id))) {
+      const gSpecific = dishesByGroup[groupId] || dishesByGroup[targetGId] || (activeGroupId && cleanId(activeGroupId) === targetGId ? groupSpecificDishes : []);
+      if (gSpecific.some((gd: any) => cleanId(gd.DishId || gd.id) === cleanId(dish.DishId || dish.id))) {
         return true;
       }
       return false;
     };
 
     // Check if the dish belongs to any group in the currently selected category
-    const belongsToCategory = dishGroups.some(g => matchesDishGroupId(g.DishGroupId));
+    const belongsToCategory = activeDishGroups.some(g => matchesDishGroupId(g.DishGroupId));
     
     // If a group is selected, match it; otherwise ensure it belongs to the selected category
-    const matchesGroup = selectedGroupId
-      ? matchesDishGroupId(selectedGroupId)
+    const matchesGroup = activeGroupId
+      ? matchesDishGroupId(activeGroupId)
       : belongsToCategory;
       
     return matchesGroup;

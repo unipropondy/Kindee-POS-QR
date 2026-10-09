@@ -361,7 +361,16 @@ export default function PaymentScreen() {
   const settingsStore = useCompanySettingsStore((state: { settings: CompanySettings }) => state.settings);
   const currencySymbol = settingsStore.currencySymbol || "$";
   const gstRate = (settingsStore.gstPercentage || 0) / 100;
-  const isTakeawayOrder = context?.orderType === "TAKEAWAY";
+  const isTakeawayOrder = Boolean(
+    context?.orderType === "TAKEAWAY" ||
+    context?.takeawayNo ||
+    String(context?.tableNo || "").toUpperCase().startsWith("TW") ||
+    String(context?.tableNo || "").toUpperCase().startsWith("TTW") ||
+    String(context?.tableId || "").toUpperCase().includes("TW") ||
+    String(context?.tableId || "").toUpperCase().includes("TAKEAWAY") ||
+    String(context?.section || "").toUpperCase().includes("TW") ||
+    String(context?.section || "").toUpperCase().includes("TAKEAWAY")
+  );
   const dineInScRate = isTakeawayOrder ? 0 : (settingsStore.serviceChargePercentage || 0) / 100;
   const twScRate = (settingsStore.twServiceChargePercentage || 0) / 100;
 

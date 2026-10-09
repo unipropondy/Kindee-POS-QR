@@ -278,8 +278,18 @@ export default function CustomerCartScreen() {
   const discountAmt = Math.max(0, Math.min(subtotal, rawDiscount));
   const netSubtotal = Math.max(0, subtotal - discountAmt);
 
-  // Calculate service charge eligible subtotal (all dine-in items that are not takeaway)
-  const scEligibleSubtotal = currentCart.reduce((sum, item) => {
+  // Check if current order context is for a TW (Takeaway) table
+  const isTWTable = 
+    orderContext?.orderType === "TAKEAWAY" ||
+    Boolean(orderContext?.takeawayNo) ||
+    String(orderContext?.tableNo || "").toUpperCase().startsWith("TW") ||
+    String(orderContext?.tableNo || "").toUpperCase().startsWith("TTW") ||
+    String(orderContext?.tableId || "").toUpperCase().includes("TW") ||
+    String(orderContext?.section || "").toUpperCase().includes("TW") ||
+    String(orderContext?.section || "").toUpperCase().includes("TAKEAWAY");
+
+  // Calculate service charge eligible subtotal (all dine-in items that are not takeaway, 0 if TW table)
+  const scEligibleSubtotal = isTWTable ? 0 : currentCart.reduce((sum, item) => {
     const isTakeaway = item.isTakeaway === true || String(item.isTakeaway) === "1" || String(item.isTakeaway).toLowerCase() === "true" || (item as any).IsTakeaway === true || String((item as any).IsTakeaway) === "1" || String((item as any).IsTakeaway).toLowerCase() === "true";
     const isSC = !isTakeaway && (Number(item.isServiceCharge) === 1 || item.isServiceCharge === true || Number((item as any).IsServiceCharge) === 1 || (item as any).IsServiceCharge === true);
     if (isSC) {
@@ -288,18 +298,21 @@ export default function CustomerCartScreen() {
     return sum;
   }, 0);
 
-  // Calculate takeaway items quantity and charge
-  const takeawayItemsQty = currentCart.reduce((sum, item) => {
-    const isTakeaway = item.isTakeaway === true || String(item.isTakeaway) === "1" || String(item.isTakeaway).toLowerCase() === "true" || (item as any).IsTakeaway === true || String((item as any).IsTakeaway) === "1" || String((item as any).IsTakeaway).toLowerCase() === "true";
-    if (isTakeaway) {
-      return sum + (item.qty || 0);
+  // Calculate takeaway charge amount:
+  // For TW table, apply takeaway charge to all items in cart.
+  // For normal table, apply takeaway charge to items marked as takeaway.
+  const takeawayChargeAmt = currentCart.reduce((sum, item) => {
+    const isTakeawayItem = isTWTable || item.isTakeaway === true || String(item.isTakeaway) === "1" || String(item.isTakeaway).toLowerCase() === "true" || (item as any).IsTakeaway === true || String((item as any).IsTakeaway) === "1" || String((item as any).IsTakeaway).toLowerCase() === "true";
+    if (isTakeawayItem) {
+      const dishSpecificTW = Number(item.takeawayCharge ?? (item as any).TakeawayCharge ?? 0);
+      const effectiveTWRate = dishSpecificTW > 0 ? dishSpecificTW : takeawayChargeRate;
+      return sum + (item.qty || 0) * effectiveTWRate;
     }
     return sum;
   }, 0);
-  const takeawayChargeAmt = takeawayItemsQty * takeawayChargeRate;
 
-  // Pro-rate service charge if discount is applied
-  const serviceChargeAmt = Math.max(0, scEligibleSubtotal - discountAmt) * (serviceChargePercentage / 100);
+  // Pro-rate service charge if discount is applied. For TW tables, service charge is $0.00.
+  const serviceChargeAmt = isTWTable ? 0 : Math.max(0, scEligibleSubtotal - discountAmt) * (serviceChargePercentage / 100);
   const totalBeforeGst = netSubtotal + serviceChargeAmt + takeawayChargeAmt;
   const gstAmt = totalBeforeGst * (gstPercentage / 100);
   const grandTotal = totalBeforeGst + gstAmt;
@@ -390,7 +403,7 @@ export default function CustomerCartScreen() {
         },
         body: JSON.stringify({
           tableId: orderContext.tableId,
-          orderType: "DINE_IN",
+          orderType: isTWTable ? "TAKEAWAY" : (orderContext.orderType || "DINE_IN"),
           entryStatus: "q",
           discountAmount: discountAmt,
           discountRemarks: applyPromo && activePromoCode ? `Applied Promo Code: ${activePromoCode}` : null,
@@ -407,6 +420,7 @@ export default function CustomerCartScreen() {
             note: notes,
             isCombo: item.isCombo,
             comboSelections: item.comboSelections || [],
+            isTakeaway: isTWTable ? true : Boolean(item.isTakeaway || (item as any).IsTakeaway),
           }))
         })
       });
@@ -605,7 +619,7 @@ export default function CustomerCartScreen() {
                   <Text style={[styles.billValue, { color: "#FF5E1A", fontWeight: "700" }]}>-{currencySymbol}{discountAmt.toFixed(2)}</Text>
                 </View>
               )}
-              {serviceChargePercentage > 0 && (
+              {serviceChargePercentage > 0 && !isTWTable && (
                 <View style={styles.billRow}>
                   <Text style={styles.billLabel}>Item SVC ({serviceChargePercentage}%)</Text>
                   <Text style={styles.billValue}>{currencySymbol}{serviceChargeAmt.toFixed(2)}</Text>

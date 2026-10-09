@@ -8,6 +8,7 @@ interface MenuState {
   dishesByGroup: Record<string, any[]>;
   allDishes: any[];
   modifierCache: Record<string, any[]>;
+  directFetchedGroups: Record<string, boolean>;
   lastFetched: number | null;
   isLoading: boolean;
 
@@ -25,13 +26,14 @@ export const useMenuStore = create<MenuState>((set, get) => ({
   dishesByGroup: {},
   allDishes: [],
   modifierCache: {},
+  directFetchedGroups: {},
   lastFetched: null,
   isLoading: false,
 
   fetchMenu: async (force = false) => {
-    const { lastFetched, kitchens } = get();
-    // Cache for 10 minutes unless forced
-    if (!force && lastFetched && kitchens.length > 0 && Date.now() - lastFetched < 600000) {
+    const { lastFetched, kitchens, allDishes } = get();
+    // Cache for 10 minutes unless forced or if data is incomplete
+    if (!force && lastFetched && kitchens.length > 0 && allDishes.length > 0 && Date.now() - lastFetched < 600000) {
       return;
     }
 
@@ -84,6 +86,7 @@ export const useMenuStore = create<MenuState>((set, get) => ({
       // 🟢 Build dishesByGroup map for ALL groups directly from allDishesData
       const dishesByGroupMap: Record<string, any[]> = {};
 
+      // 1. Map dishes for groups defined in groupsRaw
       groupsRaw.forEach((g: any) => {
         const targetGId = cleanId(g.DishGroupId);
         if (!targetGId) return;
@@ -99,6 +102,24 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 
         dishesByGroupMap[g.DishGroupId] = groupDishes;
         dishesByGroupMap[targetGId] = groupDishes;
+      });
+
+      // 2. Comprehensive pass: ensure every dish's primary and mapped group IDs are present in dishesByGroupMap
+      allDishesData.forEach((d: any) => {
+        const primaryGId = cleanId(d.DishGroupId);
+        const mappedGroupIds = d.MappedGroupIds
+          ? String(d.MappedGroupIds).split(",").map(s => cleanId(s)).filter(Boolean)
+          : [];
+        const groupIdsToAddTo = new Set<string>();
+        if (primaryGId) groupIdsToAddTo.add(primaryGId);
+        mappedGroupIds.forEach(gid => groupIdsToAddTo.add(gid));
+
+        groupIdsToAddTo.forEach((gid) => {
+          if (!dishesByGroupMap[gid]) dishesByGroupMap[gid] = [];
+          if (!dishesByGroupMap[gid].some((existing: any) => cleanId(existing.DishId || existing.id) === cleanId(d.DishId || d.id))) {
+            dishesByGroupMap[gid].push(d);
+          }
+        });
       });
 
       set((state) => ({ 
@@ -143,11 +164,11 @@ export const useMenuStore = create<MenuState>((set, get) => ({
   },
 
   fetchDishes: async (groupId, force = false) => {
-    const { dishesByGroup, modifierCache, allDishes } = get();
+    const { dishesByGroup, modifierCache, allDishes, directFetchedGroups } = get();
     const cleanId = (id: any) => String(id || "").replace(/[{}]/g, "").trim().toLowerCase();
     const cGId = cleanId(groupId);
 
-    if (!force && (dishesByGroup[groupId] || dishesByGroup[cGId])) {
+    if (!force && directFetchedGroups[cGId] && (dishesByGroup[groupId] || dishesByGroup[cGId])) {
       const groupDishes = dishesByGroup[groupId] || dishesByGroup[cGId];
       const hasAnyModifierCached = groupDishes.some(d => modifierCache[cleanId(d.DishId || d.id)] !== undefined);
       if (!hasAnyModifierCached) {
@@ -183,6 +204,7 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 
       set((state) => ({
         dishesByGroup: { ...state.dishesByGroup, [groupId]: dishes, [cGId]: dishes },
+        directFetchedGroups: { ...state.directFetchedGroups, [groupId]: true, [cGId]: true },
         allDishes: Array.from(updatedAllMap.values())
       }));
 

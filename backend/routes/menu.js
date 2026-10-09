@@ -63,7 +63,7 @@ router.get("/dishgroups/all", async (req, res) => {
       LEFT JOIN DishGroupKitchentype dkt
         ON a.DishGroupId = dkt.DishGroupId
       LEFT JOIN CategoryMaster cm
-        ON (a.CategoryId = cm.CategoryId OR dkt.KitchenTypeName = cm.CategoryName)
+        ON (a.CategoryId = cm.CategoryId OR LOWER(TRIM(dkt.KitchenTypeName)) = LOWER(TRIM(cm.CategoryName)))
       WHERE a.IsActive = 1 AND ISNULL(a.CategoryId, cm.CategoryId) IS NOT NULL
       ORDER BY ISNULL(a.SortCode, 0) ASC, a.DishGroupName ASC
     `);
@@ -98,7 +98,7 @@ router.get("/dishgroups/:CategoryId", async (req, res) => {
           WHERE a.IsActive = 1
           AND (
                 a.CategoryId = @CategoryId
-                OR dkt.KitchenTypeName = cm.CategoryName
+                OR LOWER(TRIM(dkt.KitchenTypeName)) = LOWER(TRIM(cm.CategoryName))
           )
           ORDER BY a.SortCode ASC, a.DishGroupName ASC
       `);

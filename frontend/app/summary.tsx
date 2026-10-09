@@ -416,7 +416,16 @@ export default function SummaryScreen() {
   const settings = useCompanySettingsStore((state: any) => state.settings);
   const currencySymbol = settings.currencySymbol || "$";
   const gstRate = (settings.gstPercentage || 0) / 100;
-  const isTakeawayOrder = context?.orderType === "TAKEAWAY";
+  const isTakeawayOrder = Boolean(
+    context?.orderType === "TAKEAWAY" ||
+    context?.takeawayNo ||
+    String(context?.tableNo || "").toUpperCase().startsWith("TW") ||
+    String(context?.tableNo || "").toUpperCase().startsWith("TTW") ||
+    String(context?.tableId || "").toUpperCase().includes("TW") ||
+    String(context?.tableId || "").toUpperCase().includes("TAKEAWAY") ||
+    String(context?.section || "").toUpperCase().includes("TW") ||
+    String(context?.section || "").toUpperCase().includes("TAKEAWAY")
+  );
   const scRate = isTakeawayOrder ? 0 : (settings.serviceChargePercentage || 0) / 100;
   const twScRate = (settings.twServiceChargePercentage || 0) / 100;
 

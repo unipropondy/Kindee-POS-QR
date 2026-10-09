@@ -1007,7 +1007,16 @@ export default React.memo(function CartSidebar({ width = 400 }: CartSidebarProps
   const settings = useCompanySettingsStore((state: any) => state.settings);
   const currencySymbol = settings.currencySymbol || "$";
   const gstRate = (settings.gstPercentage || 0) / 100;
-  const isTakeawayOrder = orderContext?.orderType === "TAKEAWAY";
+  const isTakeawayOrder = Boolean(
+    orderContext?.orderType === "TAKEAWAY" ||
+    orderContext?.takeawayNo ||
+    String(orderContext?.tableNo || "").toUpperCase().startsWith("TW") ||
+    String(orderContext?.tableNo || "").toUpperCase().startsWith("TTW") ||
+    String(orderContext?.tableId || "").toUpperCase().includes("TW") ||
+    String(orderContext?.tableId || "").toUpperCase().includes("TAKEAWAY") ||
+    String(orderContext?.section || "").toUpperCase().includes("TW") ||
+    String(orderContext?.section || "").toUpperCase().includes("TAKEAWAY")
+  );
   const dineInScRate = isTakeawayOrder ? 0 : (settings.serviceChargePercentage || 0) / 100;
   const twScRate = (settings.twServiceChargePercentage || 0) / 100;
 

@@ -108,7 +108,16 @@ export const CustomerDisplaySync = {
 
       const scPercentage = companySettings.serviceChargePercentage || 0;
       const twScPercentage = companySettings.twServiceChargePercentage || 0;
-      const isTakeawayOrder = orderContext?.orderType === "TAKEAWAY";
+      const isTakeawayOrder = Boolean(
+        orderContext?.orderType === "TAKEAWAY" ||
+        orderContext?.takeawayNo ||
+        String(orderContext?.tableNo || "").toUpperCase().startsWith("TW") ||
+        String(orderContext?.tableNo || "").toUpperCase().startsWith("TTW") ||
+        String(orderContext?.tableId || "").toUpperCase().includes("TW") ||
+        String(orderContext?.tableId || "").toUpperCase().includes("TAKEAWAY") ||
+        String(orderContext?.section || "").toUpperCase().includes("TW") ||
+        String(orderContext?.section || "").toUpperCase().includes("TAKEAWAY")
+      );
       const scRate = isTakeawayOrder ? 0 : scPercentage / 100;
       const twScRate = twScPercentage / 100;
       const gstRate = (gstPercentage || 0) / 100;
