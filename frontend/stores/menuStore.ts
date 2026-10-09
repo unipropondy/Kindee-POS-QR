@@ -92,7 +92,7 @@ export const useMenuStore = create<MenuState>((set, get) => ({
   },
 
   fetchDishes: async (groupId, force = false) => {
-    const { dishesByGroup, modifierCache } = get();
+    const { dishesByGroup, modifierCache, allDishes } = get();
     if (!force && dishesByGroup[groupId]) {
       const groupDishes = dishesByGroup[groupId];
       const hasAnyModifierCached = groupDishes.some(d => modifierCache[d.DishId || d.id] !== undefined);
@@ -107,13 +107,28 @@ export const useMenuStore = create<MenuState>((set, get) => ({
       const data = await res.json();
       const dishesRaw = Array.isArray(data) ? data : [];
       
-      // Deduplicate dishes by DishId
+      // Clean and deduplicate dishes by DishId
       const dishes = Array.from(
-        new Map(dishesRaw.map((d: any) => [d.DishId || d.id, d])).values()
+        new Map(dishesRaw.map((d: any) => [String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase(), d])).values()
       );
 
+      // Merge into allDishes to ensure allDishes remains 100% comprehensive
+      const updatedAllMap = new Map<string, any>();
+      allDishes.forEach((d: any) => {
+        const id = String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase();
+        if (id) updatedAllMap.set(id, d);
+      });
+      dishes.forEach((d: any) => {
+        const id = String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase();
+        if (id) {
+          const existing = updatedAllMap.get(id);
+          updatedAllMap.set(id, existing ? { ...existing, ...d } : d);
+        }
+      });
+
       set((state) => ({
-        dishesByGroup: { ...state.dishesByGroup, [groupId]: dishes }
+        dishesByGroup: { ...state.dishesByGroup, [groupId]: dishes },
+        allDishes: Array.from(updatedAllMap.values())
       }));
 
       // 🚀 BACKGROUND PRE-FETCH: Load all modifiers for this group
@@ -146,23 +161,29 @@ export const useMenuStore = create<MenuState>((set, get) => ({
     }
   },
 
-  clearCache: () => set({ kitchens: [], dishGroups: {}, dishesByGroup: {}, allDishes: [], modifierCache: {}, lastFetched: null }),
+  clearCache: () => set({ lastFetched: null }),
 
   forceRefreshMenu: async () => {
+    const { dishesByGroup } = get();
     set({ isLoading: true });
     try {
       await fetch(`${API_URL}/api/menu/clear-cache`, { method: 'POST' });
     } catch (err) {
       console.warn("Backend cache clear failed:", err);
     }
-    get().clearCache();
     await get().fetchMenu(true);
+
+    // Re-fetch all currently active cached groups to keep dishesByGroup fresh
+    const activeGroupIds = Object.keys(dishesByGroup);
+    if (activeGroupIds.length > 0) {
+      await Promise.all(activeGroupIds.map(gId => get().fetchDishes(gId, true)));
+    }
+    set({ isLoading: false });
   },
 }));
 
 // 🔌 Real-time Socket Listener for Menu Updates (e.g. IsPublished toggle = 1 or 0)
 socket.on('menu_updated', (data) => {
   console.log('⚡ [MenuStore] Received menu_updated socket event:', data);
-  useMenuStore.getState().clearCache();
-  useMenuStore.getState().fetchMenu(true);
+  useMenuStore.getState().forceRefreshMenu();
 });

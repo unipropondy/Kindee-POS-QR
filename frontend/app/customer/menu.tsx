@@ -679,7 +679,7 @@ export default function CustomerMenuScreen() {
           });
         }
         if (selectedGroupId) {
-          fetchDishes(selectedGroupId);
+          fetchDishes(selectedGroupId, true);
         }
       });
     };
