@@ -37,11 +37,14 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 
     set({ isLoading: true });
     try {
+      const cleanId = (id: any) => String(id || "").replace(/[{}]/g, "").trim().toLowerCase();
+      const cacheBust = force ? `?force=1&t=${Date.now()}` : "";
+
       // 🚀 PARALLEL ATOMIC FETCH: Load kitchens, all dish groups, and all dishes concurrently
       const [kRes, gRes, dRes] = await Promise.all([
-        fetch(`${API_URL}/api/menu/kitchens`),
-        fetch(`${API_URL}/api/menu/dishgroups/all`),
-        fetch(`${API_URL}/api/menu/dishes/all`)
+        fetch(`${API_URL}/api/menu/kitchens${cacheBust}`),
+        fetch(`${API_URL}/api/menu/dishgroups/all${cacheBust}`),
+        fetch(`${API_URL}/api/menu/dishes/all${cacheBust}`)
       ]);
 
       const [kData, gData, dData] = await Promise.all([
@@ -53,31 +56,33 @@ export const useMenuStore = create<MenuState>((set, get) => ({
       const rawKitchens = Array.isArray(kData) ? kData.filter((k: any) => k.KitchenTypeName && !k.KitchenTypeName.includes("TEST")) : [];
       // 🟢 Deduplicate kitchens by CategoryId
       const kitchensData = Array.from(
-        new Map(rawKitchens.map((k: any) => [k.CategoryId, k])).values()
+        new Map(rawKitchens.map((k: any) => [cleanId(k.CategoryId), k])).values()
       );
 
       const allDishesRaw = Array.isArray(dData) ? dData : [];
       // Deduplicate & clean dishes by normalized DishId
       const allDishesData = Array.from(
-        new Map(allDishesRaw.map((d: any) => [String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase(), d])).values()
+        new Map(allDishesRaw.map((d: any) => [cleanId(d.DishId || d.id), d])).values()
       );
 
-      // 🟢 Build dishGroups map grouped by CategoryId
+      // 🟢 Build dishGroups map grouped by CategoryId (keyed by both raw & cleanId)
       const groupsRaw = Array.isArray(gData) ? gData : [];
       const dishGroupsMap: Record<string, any[]> = {};
       groupsRaw.forEach((g: any) => {
         const catId = g.CategoryId;
         if (catId) {
-          if (!dishGroupsMap[catId]) dishGroupsMap[catId] = [];
-          if (!dishGroupsMap[catId].some((existing: any) => existing.DishGroupId === g.DishGroupId)) {
-            dishGroupsMap[catId].push(g);
-          }
+          const cCatId = cleanId(catId);
+          [catId, cCatId].forEach((key) => {
+            if (!dishGroupsMap[key]) dishGroupsMap[key] = [];
+            if (!dishGroupsMap[key].some((existing: any) => cleanId(existing.DishGroupId) === cleanId(g.DishGroupId))) {
+              dishGroupsMap[key].push(g);
+            }
+          });
         }
       });
 
       // 🟢 Build dishesByGroup map for ALL groups directly from allDishesData
       const dishesByGroupMap: Record<string, any[]> = {};
-      const cleanId = (id: any) => String(id || "").replace(/[{}]/g, "").trim().toLowerCase();
 
       groupsRaw.forEach((g: any) => {
         const targetGId = cleanId(g.DishGroupId);
@@ -93,6 +98,7 @@ export const useMenuStore = create<MenuState>((set, get) => ({
         });
 
         dishesByGroupMap[g.DishGroupId] = groupDishes;
+        dishesByGroupMap[targetGId] = groupDishes;
       });
 
       set((state) => ({ 
@@ -111,7 +117,11 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 
   fetchGroups: async (kitchenId) => {
     const { dishGroups } = get();
+    const cleanId = (id: any) => String(id || "").replace(/[{}]/g, "").trim().toLowerCase();
+    const cKId = cleanId(kitchenId);
+
     if (dishGroups[kitchenId]) return dishGroups[kitchenId];
+    if (dishGroups[cKId]) return dishGroups[cKId];
 
     try {
       const res = await fetch(`${API_URL}/api/menu/dishgroups/${kitchenId}`);
@@ -119,11 +129,11 @@ export const useMenuStore = create<MenuState>((set, get) => ({
       const rawGroups = Array.isArray(data) ? data : [];
       // 🟢 Deduplicate groups by DishGroupId
       const groups = Array.from(
-        new Map(rawGroups.map((g: any) => [g.DishGroupId || g.id, g])).values()
+        new Map(rawGroups.map((g: any) => [cleanId(g.DishGroupId || g.id), g])).values()
       );
       
       set((state) => ({
-        dishGroups: { ...state.dishGroups, [kitchenId]: groups }
+        dishGroups: { ...state.dishGroups, [kitchenId]: groups, [cKId]: groups }
       }));
       return groups;
     } catch (error) {
@@ -134,33 +144,37 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 
   fetchDishes: async (groupId, force = false) => {
     const { dishesByGroup, modifierCache, allDishes } = get();
-    if (!force && dishesByGroup[groupId]) {
-      const groupDishes = dishesByGroup[groupId];
-      const hasAnyModifierCached = groupDishes.some(d => modifierCache[d.DishId || d.id] !== undefined);
+    const cleanId = (id: any) => String(id || "").replace(/[{}]/g, "").trim().toLowerCase();
+    const cGId = cleanId(groupId);
+
+    if (!force && (dishesByGroup[groupId] || dishesByGroup[cGId])) {
+      const groupDishes = dishesByGroup[groupId] || dishesByGroup[cGId];
+      const hasAnyModifierCached = groupDishes.some(d => modifierCache[cleanId(d.DishId || d.id)] !== undefined);
       if (!hasAnyModifierCached) {
         get().fetchModifiersForGroup(groupId);
       }
-      return dishesByGroup[groupId];
+      return groupDishes;
     }
 
     try {
-      const res = await fetch(`${API_URL}/api/menu/dishes/group/${groupId}`);
+      const cacheBust = force ? `?force=1&t=${Date.now()}` : "";
+      const res = await fetch(`${API_URL}/api/menu/dishes/group/${groupId}${cacheBust}`);
       const data = await res.json();
       const dishesRaw = Array.isArray(data) ? data : [];
       
       // Clean and deduplicate dishes by DishId
       const dishes = Array.from(
-        new Map(dishesRaw.map((d: any) => [String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase(), d])).values()
+        new Map(dishesRaw.map((d: any) => [cleanId(d.DishId || d.id), d])).values()
       );
 
       // Merge into allDishes to ensure allDishes remains 100% comprehensive
       const updatedAllMap = new Map<string, any>();
       allDishes.forEach((d: any) => {
-        const id = String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase();
+        const id = cleanId(d.DishId || d.id);
         if (id) updatedAllMap.set(id, d);
       });
       dishes.forEach((d: any) => {
-        const id = String(d.DishId || d.id).replace(/[{}]/g, "").trim().toLowerCase();
+        const id = cleanId(d.DishId || d.id);
         if (id) {
           const existing = updatedAllMap.get(id);
           updatedAllMap.set(id, existing ? { ...existing, ...d } : d);
@@ -168,7 +182,7 @@ export const useMenuStore = create<MenuState>((set, get) => ({
       });
 
       set((state) => ({
-        dishesByGroup: { ...state.dishesByGroup, [groupId]: dishes },
+        dishesByGroup: { ...state.dishesByGroup, [groupId]: dishes, [cGId]: dishes },
         allDishes: Array.from(updatedAllMap.values())
       }));
 

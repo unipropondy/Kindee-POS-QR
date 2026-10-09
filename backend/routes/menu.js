@@ -7,7 +7,8 @@ const sharp = require("sharp");
 const cache = new Map();
 const CACHE_TTL = 30000; // 30 seconds for dynamic responsiveness
 
-function getCached(key) {
+function getCached(key, req) {
+  if (req && (req.query.t || req.query.force)) return null;
   const item = cache.get(key);
   if (item && (Date.now() - item.time < CACHE_TTL)) {
     console.log(`⚡ [MenuCache] Cache HIT: ${key}`);
@@ -25,7 +26,7 @@ function setCache(key, data) {
 /* ================= KITCHENS / CATEGORIES ================= */
 router.get("/kitchens", async (req, res) => {
   try {
-    const cached = getCached("kitchens");
+    const cached = getCached("kitchens", req);
     if (cached) return res.json(cached);
 
     const pool = await poolPromise;
@@ -47,7 +48,7 @@ router.get("/kitchens", async (req, res) => {
 router.get("/dishgroups/all", async (req, res) => {
   try {
     const cacheKey = "dishgroups_all";
-    const cached = getCached(cacheKey);
+    const cached = getCached(cacheKey, req);
     if (cached) return res.json(cached);
 
     const pool = await poolPromise;
@@ -77,7 +78,7 @@ router.get("/dishgroups/:CategoryId", async (req, res) => {
   try {
     const categoryId = req.params.CategoryId;
     const cacheKey = `dishgroups_${categoryId}`;
-    const cached = getCached(cacheKey);
+    const cached = getCached(cacheKey, req);
     if (cached) return res.json(cached);
 
     const pool = await poolPromise;
@@ -112,7 +113,7 @@ router.get("/dishgroups/:CategoryId", async (req, res) => {
 router.get("/dishes/all", async (req, res) => {
   try {
     const cacheKey = "dishes_all";
-    const cached = getCached(cacheKey);
+    const cached = getCached(cacheKey, req);
     if (cached) return res.json(cached);
 
     const pool = await poolPromise;
@@ -163,7 +164,7 @@ router.get("/dishes/group/:DishGroupId", async (req, res) => {
   try {
     const dishGroupId = req.params.DishGroupId;
     const cacheKey = `dishes_group_${dishGroupId}`;
-    const cached = getCached(cacheKey);
+    const cached = getCached(cacheKey, req);
     if (cached) return res.json(cached);
 
     const pool = await poolPromise;

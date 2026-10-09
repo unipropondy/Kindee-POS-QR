@@ -638,7 +638,7 @@ export default function CustomerMenuScreen() {
     if (published.length === 0) return;
 
     let targetKitchenId: string | null = selectedKitchenId;
-    if (!targetKitchenId || !published.some(k => k.CategoryId === targetKitchenId)) {
+    if (!targetKitchenId || !published.some(k => cleanId(k.CategoryId) === cleanId(targetKitchenId))) {
       targetKitchenId = published[0].CategoryId;
       setSelectedKitchenId(targetKitchenId);
     }
@@ -646,7 +646,7 @@ export default function CustomerMenuScreen() {
     if (!targetKitchenId) return;
 
     // 🟢 1. Synchronously populate dish groups and selected group from store
-    const storeGroups = useMenuStore.getState().dishGroups[targetKitchenId] || [];
+    const storeGroups = useMenuStore.getState().dishGroups[targetKitchenId] || useMenuStore.getState().dishGroups[cleanId(targetKitchenId)] || [];
     const publishedGroups = storeGroups.filter((g: any) => isPublishedForQR(g.IsPublished));
     setDishGroups(publishedGroups);
 
@@ -657,7 +657,7 @@ export default function CustomerMenuScreen() {
       return publishedGroups.length > 0 ? publishedGroups[0].DishGroupId : null;
     });
 
-    // 🟢 2. Async backup fetch to ensure full sync
+    // 🟢 2. Async backup fetch to ensure full sync & pre-fetch dishes for all groups
     fetchGroups(targetKitchenId).then((groups: any[]) => {
       const pubGroups = groups.filter((g: any) => isPublishedForQR(g.IsPublished));
       setDishGroups(pubGroups);
@@ -667,13 +667,20 @@ export default function CustomerMenuScreen() {
         }
         return pubGroups.length > 0 ? pubGroups[0].DishGroupId : null;
       });
+
+      // 🚀 Automatically pre-fetch dishes for ALL published groups in the current category
+      pubGroups.forEach(g => {
+        if (g.DishGroupId) {
+          fetchDishes(g.DishGroupId, true);
+        }
+      });
     });
   }, [kitchens, selectedKitchenId]);
 
   // Fetch dishes directly for the selected group to ensure 100% complete data
   useEffect(() => {
     if (selectedGroupId) {
-      fetchDishes(selectedGroupId);
+      fetchDishes(selectedGroupId, true);
     }
   }, [selectedGroupId]);
 
@@ -693,6 +700,11 @@ export default function CustomerMenuScreen() {
                 return currentGId; // Preserve active selection!
               }
               return publishedGroups.length > 0 ? publishedGroups[0].DishGroupId : null;
+            });
+            publishedGroups.forEach(g => {
+              if (g.DishGroupId) {
+                fetchDishes(g.DishGroupId, true);
+              }
             });
           });
         }
@@ -755,7 +767,9 @@ export default function CustomerMenuScreen() {
   }, []);
 
   // Combine allDishes with group-specific dishes from store
-  const groupSpecificDishes = selectedGroupId && dishesByGroup[selectedGroupId] ? dishesByGroup[selectedGroupId] : [];
+  const groupSpecificDishes = selectedGroupId
+    ? (dishesByGroup[selectedGroupId] || dishesByGroup[cleanId(selectedGroupId)] || [])
+    : [];
   
   const combinedMap = new Map<string, any>();
   allDishes.forEach((d: any) => {

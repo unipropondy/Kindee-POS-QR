@@ -115,25 +115,34 @@ export default function CustomerItemDetailsScreen() {
     const current = selections[groupId] || [];
     if (isMulti) {
       if (current.includes(optionDishId)) {
-        if (current.length > minSel) {
-          setSelections({
-            ...selections,
-            [groupId]: current.filter(id => id !== optionDishId),
-          });
-        }
+        // Allow unclicking / deselecting an item freely
+        setSelections({
+          ...selections,
+          [groupId]: current.filter(id => id !== optionDishId),
+        });
       } else {
         if (current.length < maxSel) {
           setSelections({
             ...selections,
             [groupId]: [...current, optionDishId],
           });
+        } else {
+          Alert.alert("Selection Limit", `You can select up to ${maxSel} option(s).`);
         }
       }
     } else {
-      setSelections({
-        ...selections,
-        [groupId]: [optionDishId],
-      });
+      if (current.includes(optionDishId)) {
+        // Single select: allow unchecking if already selected
+        setSelections({
+          ...selections,
+          [groupId]: [],
+        });
+      } else {
+        setSelections({
+          ...selections,
+          [groupId]: [optionDishId],
+        });
+      }
     }
   };
 
