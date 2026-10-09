@@ -1067,7 +1067,7 @@ class UniversalPrinter {
                               : ""
                           }
                           ${
-                            hasCombo && !data.disableComboPrint
+                            hasCombo
                               ? `<div class="modifier-list">${comboSels.map((g: any) => {
                                   const choices = g.items || g.dishes || (Array.isArray(g) ? g : [g]);
                                   if (Array.isArray(choices)) {
@@ -1130,7 +1130,7 @@ class UniversalPrinter {
                         : ""
                     }
                     ${
-                      hasCombo && !data.disableComboPrint
+                      hasCombo
                         ? `
                       <div class="modifier-list">
                         ${comboSels
@@ -1258,9 +1258,7 @@ class UniversalPrinter {
         }
       }
 
-      // Respect "Disable Combo Print" setting: skip sub-items when flag is true
-      const disableComboPrint = !!(data as any).disableComboPrint;
-      if (!disableComboPrint && Array.isArray(comboSels) && comboSels.length > 0) {
+      if (Array.isArray(comboSels) && comboSels.length > 0) {
         comboSels.forEach((g: any) => {
           const choices = g.items || g.dishes || (Array.isArray(g) ? g : [g]);
           if (Array.isArray(choices)) {
