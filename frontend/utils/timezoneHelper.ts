@@ -83,7 +83,7 @@ export function parseDatabaseDate(dateInput: Date | string | number): Date {
   
   // Try custom regex parsing for: "Jul  9 2026  2:12PM"
   const cleaned = str.replace(/\s+/g, ' ');
-  const match = cleaned.match(/^([a-zA-Z]{3})\s+(\d{1,2})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)$/);
+  const match = cleaned.match(/^([a-zA-Z]{3})\s+(\d{1,2})\s+(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)$/i);
   if (match) {
     const monthMap: Record<string, number> = {
       jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
@@ -102,16 +102,18 @@ export function parseDatabaseDate(dateInput: Date | string | number): Date {
     return new Date(isoStr);
   }
 
-  // If string has explicit timezone offset (+08:00, -05:00, Z), parse directly as JS Date
-  if (/[Z+-]\d{2}:?\d{2}$/i.test(str) || str.endsWith('Z')) {
+  // If string has explicit non-Z offset (e.g. +08:00, -05:00)
+  if (/[+-]\d{2}:?\d{2}$/.test(str)) {
     const directParsed = new Date(str);
     if (!isNaN(directParsed.getTime())) {
       return directParsed;
     }
   }
 
-  // For bare local date strings (e.g. "2026-09-22 15:26:00"), normalize space to 'T' and append SGT (+08:00)
-  let cleanStr = str.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '');
+  // Database timestamps (e.g. "2026-10-09T21:38:00.000Z", "2026-09-22 15:26:00") are stored in SGT local time in SQL Server.
+  // When serialized by Node's mssql driver, ISO strings end in 'Z' but represent SGT local time.
+  // Strip trailing 'Z' if present, replace space with 'T', and append SGT (+08:00)
+  let cleanStr = str.replace(/Z$/i, '');
 
   if (!cleanStr.includes('T') && cleanStr.includes(' ') && !/^[a-zA-Z]{3}/.test(cleanStr)) {
     cleanStr = cleanStr.replace(' ', 'T');
@@ -121,7 +123,10 @@ export function parseDatabaseDate(dateInput: Date | string | number): Date {
     if (!cleanStr.includes('T')) {
       cleanStr += 'T00:00:00';
     }
-    cleanStr += '+08:00';
+    const timePart = cleanStr.split('T')[1] || '';
+    if (!/[+-]\d{2}:?\d{2}$/.test(timePart)) {
+      cleanStr += '+08:00';
+    }
   }
 
   const parsed = new Date(cleanStr);

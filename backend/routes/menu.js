@@ -595,7 +595,7 @@ router.get("/barcode/:code", async (req, res) => {
   }
 });
 
-router.clearMenuCache = (io) => {
+router.clearMenuCache = (io, emitSocket = true) => {
   cache.clear();
   console.log("⚡ [MenuCache] Cache INVALIDATION: All menu cache cleared dynamically");
   if (typeof imageCache !== 'undefined') {
@@ -609,7 +609,7 @@ router.clearMenuCache = (io) => {
   } catch (err) {
     console.error("Failed to clear combo cache:", err.message);
   }
-  if (io) {
+  if (io && emitSocket) {
     console.log("📡 [MenuCache] Emitting menu_updated socket event...");
     io.emit("menu_updated", { timestamp: Date.now() });
   }
@@ -642,7 +642,7 @@ router.post("/publish-status", async (req, res) => {
     }
 
     const io = req.app.get("io");
-    router.clearMenuCache(io);
+    router.clearMenuCache(io, true);
 
     res.json({ success: true, isPublished: pubVal, dishId, categoryId, dishGroupId });
   } catch (err) {
@@ -653,7 +653,7 @@ router.post("/publish-status", async (req, res) => {
 
 router.post("/clear-cache", (req, res) => {
   const io = req.app.get("io");
-  router.clearMenuCache(io);
+  router.clearMenuCache(io, false);
   res.json({ success: true, message: "Menu and image cache cleared successfully" });
 });
 

@@ -31,9 +31,12 @@ export const useMenuStore = create<MenuState>((set, get) => ({
   isLoading: false,
 
   fetchMenu: async (force = false) => {
-    const { lastFetched, kitchens, allDishes } = get();
+    const { lastFetched, kitchens, allDishes, isLoading } = get();
     // Cache for 10 minutes unless forced or if data is incomplete
     if (!force && lastFetched && kitchens.length > 0 && allDishes.length > 0 && Date.now() - lastFetched < 600000) {
+      return;
+    }
+    if (isLoading && force) {
       return;
     }
 
@@ -241,20 +244,15 @@ export const useMenuStore = create<MenuState>((set, get) => ({
   clearCache: () => set({ lastFetched: null }),
 
   forceRefreshMenu: async () => {
-    const { dishesByGroup } = get();
     set({ isLoading: true });
     try {
       await fetch(`${API_URL}/api/menu/clear-cache`, { method: 'POST' });
     } catch (err) {
       console.warn("Backend cache clear failed:", err);
     }
+    // fetchMenu(true) fetches kitchens, dishgroups/all, and dishes/all concurrently in 3 clean requests,
+    // refreshing all groups and dishes without flooding the network with dozens of individual requests.
     await get().fetchMenu(true);
-
-    // Re-fetch all currently active cached groups to keep dishesByGroup fresh
-    const activeGroupIds = Object.keys(dishesByGroup);
-    if (activeGroupIds.length > 0) {
-      await Promise.all(activeGroupIds.map(gId => get().fetchDishes(gId, true)));
-    }
     set({ isLoading: false });
   },
 }));
@@ -262,5 +260,5 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 // 🔌 Real-time Socket Listener for Menu Updates (e.g. IsPublished toggle = 1 or 0)
 socket.on('menu_updated', (data) => {
   console.log('⚡ [MenuStore] Received menu_updated socket event:', data);
-  useMenuStore.getState().forceRefreshMenu();
+  useMenuStore.getState().fetchMenu(true);
 });

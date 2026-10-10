@@ -2,7 +2,7 @@
   "expo": {
     "name": "Smart POS",
     "slug": "pos-1",
-    "version": "6.0.0",
+    "version": "7.0.0",
     "orientation": "default",
     "icon": "./assets/images/logo_pos.png",
     "scheme": "restaurantapp",
@@ -22,7 +22,7 @@
         "foregroundImage": "./assets/images/logo_pos.png"
       },
       "package": "com.unipro.pos",
-      "versionCode": 6,
+      "versionCode": 7,
       "permissions": [
         "INTERNET",
         "BLUETOOTH",
