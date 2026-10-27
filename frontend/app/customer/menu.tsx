@@ -808,13 +808,6 @@ export default function CustomerMenuScreen() {
       return false;
     }
 
-    const query = search.trim().toLowerCase();
-    if (query.length > 0) {
-      const nameMatch = dish.Name?.toLowerCase().includes(query);
-      const descMatch = dish.Description?.toLowerCase().includes(query);
-      return nameMatch || descMatch;
-    }
-    
     // Check if dish matches group (either primary DishGroupId, via DishGroupMapping, or group API store cache)
     const matchesDishGroupId = (groupId: string) => {
       if (!groupId) return false;
@@ -831,6 +824,34 @@ export default function CustomerMenuScreen() {
       return false;
     };
 
+    const query = search.trim().toLowerCase();
+    if (query.length > 0) {
+      // 🟢 QR Customer Search: Exclude dishes whose associated CategoryMaster is unpublished
+      const catPub = dish.CategoryPublished !== undefined ? dish.CategoryPublished : dish.categoryPublished;
+      if (catPub !== undefined && !isPublishedForQR(catPub)) {
+        return false;
+      }
+
+      // Ensure dish belongs to at least one published category
+      const publishedCatIds = new Set(
+        kitchens.filter((k: any) => isPublishedForQR(k.IsPublished)).map((k: any) => cleanId(k.CategoryId))
+      );
+      if (publishedCatIds.size > 0) {
+        const allStoreGroups = useMenuStore.getState().dishGroups || {};
+        const isBelongingToPublishedCategory = Array.from(publishedCatIds).some((catId) => {
+          const catGroups = allStoreGroups[catId] || [];
+          return catGroups.some((g: any) => isPublishedForQR(g.IsPublished) && matchesDishGroupId(g.DishGroupId));
+        });
+        if (!isBelongingToPublishedCategory) {
+          return false;
+        }
+      }
+
+      const nameMatch = dish.Name?.toLowerCase().includes(query);
+      const descMatch = dish.Description?.toLowerCase().includes(query);
+      return nameMatch || descMatch;
+    }
+    
     // Check if the dish belongs to any group in the currently selected category
     const belongsToCategory = activeDishGroups.some(g => matchesDishGroupId(g.DishGroupId));
     
